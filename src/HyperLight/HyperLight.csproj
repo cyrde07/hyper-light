@@ -18,6 +18,8 @@
   <ItemGroup>
     <!-- HidSharp：USB HID 设备通信库，Apache-2.0 许可 -->
     <PackageReference Include="HidSharp" Version="2.6.4" />
+    <!-- System.Drawing.Common：微软官方的 Windows 图形库（截图、存 PNG），MIT 许可 -->
+    <PackageReference Include="System.Drawing.Common" Version="8.0.33" />
   </ItemGroup>
 
 </Project>

@@ -9,5 +9,6 @@ publish/
 *.user
 *.suo
 
-# 运行时生成的诊断报告
+# 运行时生成的诊断报告和截图
 hid-list-*.txt
+probe-*/

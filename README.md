@@ -5,6 +5,7 @@
 - 平台：Windows 10 / 11（64 位）
 - 语言：C#（.NET 8）
 - 设备通信：[HidSharp](https://www.nuget.org/packages/HidSharp)（Apache-2.0 许可）
+- 截图和存图：[System.Drawing.Common](https://www.nuget.org/packages/System.Drawing.Common)（微软官方，MIT 许可）
 - 协议参考：[QuadcastRGB](https://github.com/Ors1mer/QuadcastRGB)（GPL-2.0 许可）。只参考协议格式和设备编号这类事实，没有使用它的代码。
 - 不修改 Razer、Wallpaper Engine 的任何文件，不做 DLL 劫持。
 
@@ -13,8 +14,8 @@
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | M0 | 列出 HID 设备，确认 QuadCast S 的 VID / PID | 完成：03F0:028C，接口 0 是灯光控制节点 |
-| M1 | 发一个固定颜色给麦克风，确认能控制 | 进行中 |
-| M2 | 截取 PG32UCDM 屏幕，算主色调，实时发给麦克风 | 未开始 |
+| M1 | 发一个固定颜色给麦克风，确认能控制 | 完成：每秒 30 帧稳定；停止发送后麦克风立刻恢复自带灯效 |
+| M2 | 取壁纸颜色，实时发给麦克风 | 方案调整中：实测 Wallpaper Engine 取的是壁纸本身而不是整个屏幕，正在测试能否单独截壁纸窗口（probe） |
 | M3 | 调色：提高饱和度接近键盘颜色；上下两个灯区分别取色 | 未开始 |
 | M4 | 托盘程序：开机自启（和其他设备一起亮）、暂停 / 恢复、退出时灯恢复正常 | 未开始 |
 
@@ -45,6 +46,11 @@ HyperLight.exe color <上灯区颜色> [下灯区颜色] [--interval 毫秒] [--
 
 脚本里只写英文：Windows 命令行默认按 GBK 读取 .bat，写 UTF-8 中文可能导致命令错乱。
 
+### 壁纸窗口截图测试（方案 A）
+
+`manual-tests/m2-probe/probe-wallpaper.bat`（对应 `HyperLight.exe probe`）：找到 Wallpaper Engine 画壁纸的窗口，用几种方法各截两次，
+截图和报告存到 exe 旁边的 `probe-日期-时间` 文件夹。只读，不碰 Wallpaper Engine 的文件、进程和设置。
+
 ## 注意
 
 - 发颜色之前必须完全退出 HyperX NGENUITY（两个程序会同时发数据，灯会乱闪）。程序检测到它在运行时会提示。
@@ -54,11 +60,16 @@ HyperLight.exe color <上灯区颜色> [下灯区颜色] [--interval 毫秒] [--
 ```
 hyper-light/
 ├─ HyperLight.sln
-├─ manual-tests/m1/      M1 手动测试脚本
+├─ manual-tests/        手动测试脚本（m1：固定颜色；m2-probe：壁纸窗口截图测试）
 └─ src/HyperLight/
    ├─ Program.cs        入口：按命令行参数分发命令
    ├─ ColorCommand.cs   color 命令（M1 固定颜色测试）
    ├─ Rgb.cs            颜色类型（各模块共用）
+   ├─ Commands/
+   │  └─ ProbeCommand.cs       probe 命令（方案 A 测试）
+   ├─ Capture/          截图
+   │  ├─ NativeMethods.cs      Windows 系统函数声明
+   │  └─ WallpaperWindowProbe.cs  方案 A 测试：找壁纸窗口、几种方法截图、自动判断
    └─ Device/           设备通信
       ├─ UsbId.cs              USB 设备编号（VID:PID）
       ├─ QuadcastDeviceIds.cs  麦克风编号表（全项目唯一写设备编号的地方）
@@ -68,7 +79,7 @@ hyper-light/
       └─ HidDiagnostics.cs     设备诊断（M0）
 ```
 
-以后的阶段会加 `Capture/`（截屏）、`ColorProcessing/`（颜色处理）、`Config/`（配置）、`Tray/`（托盘）。
+以后的阶段会加 `ColorProcessing/`（颜色处理）、`Config/`（配置）、`Tray/`（托盘）。
 
 ## 编码规范
 
