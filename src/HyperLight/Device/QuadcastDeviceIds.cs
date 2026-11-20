@@ -9,7 +9,10 @@ internal enum MicMatch
     /// <summary>已知的 QuadCast S 编号，本工具的目标。</summary>
     QuadcastS,
 
-    /// <summary>已知的其他 HyperX 麦克风（DuoCast、QuadCast 2 等）。协议不同，不是目标，标出来是为了防止认错。</summary>
+    /// <summary>
+    /// 已知的其他 HyperX 麦克风设备：DuoCast、QuadCast 2 等协议不同的型号，
+    /// 以及 QuadCast S 自己的音频部分（不管灯光）。都不是目标，标出来是为了防止认错。
+    /// </summary>
     OtherHyperXMic,
 
     /// <summary>厂商编号对得上（金士顿或 HP），但产品编号不在表里。可能是没收录的新批次，也可能是 HP 的其他产品。</summary>
@@ -31,7 +34,8 @@ internal static class QuadcastDeviceIds
 
     /// <summary>
     /// QuadCast S 可能用的编号。
-    /// HP 的四个编号在源码里没有逐个注明型号，按源码的排列推测是 QuadCast S 的不同批次，由 M0 实测确认。
+    /// HP 的四个编号在源码里没有逐个注明型号，按源码的排列推测是 QuadCast S 的不同批次。
+    /// M0 实测：Luca 的麦克风是 03F0:028C（固件版本 0x6103）。
     /// </summary>
     private static readonly UsbId[] quadcastSIds =
     {
@@ -42,13 +46,20 @@ internal static class QuadcastDeviceIds
         new(VendorHp, 0x068C),
     };
 
-    /// <summary>其他 HyperX 麦克风的编号和名字（源码注释里写明了型号的）。</summary>
+    /// <summary>其他 HyperX 麦克风设备的编号和名字。</summary>
     private static readonly Dictionary<UsbId, string> otherMicNames = new()
     {
+        // M0 实测：和 03F0:028C 同时出现，名字也叫 QuadCast S，但没有 Feature 65 的节点，推测是负责声音的芯片
+        [new(VendorHp, 0x0294)] = "QuadCast S 的音频部分（不管灯光）",
+
+        // 以下三个是 QuadcastRGB 源码注释里写明了型号的
         [new(VendorHp, 0x098C)] = "DuoCast",
         [new(VendorHp, 0x09AF)] = "QuadCast 2",
         [new(VendorHp, 0x02B5)] = "QuadCast 2S",
     };
+
+    /// <summary>是不是已知的 QuadCast S 编号。</summary>
+    public static bool IsQuadcastS(UsbId id) => quadcastSIds.Contains(id);
 
     /// <summary>
     /// 判断一个设备编号和 HyperX 麦克风的匹配程度。
@@ -58,7 +69,7 @@ internal static class QuadcastDeviceIds
     {
         otherMicName = null;
 
-        if (quadcastSIds.Contains(id))
+        if (IsQuadcastS(id))
         {
             return MicMatch.QuadcastS;
         }

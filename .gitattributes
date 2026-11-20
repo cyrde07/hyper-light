@@ -13,6 +13,7 @@
 *.json         text eol=crlf
 *.md           text eol=crlf
 *.txt          text eol=crlf
+*.bat          text eol=crlf
 .editorconfig  text eol=crlf
 .gitattributes text eol=crlf
 .gitignore     text eol=crlf

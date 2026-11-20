@@ -1,11 +1,10 @@
-﻿using System.Diagnostics;
-using System.Text;
+﻿using System.Text;
 using HidSharp;
 
 namespace HyperLight.Device;
 
 /// <summary>
-/// M0 设备诊断：列出电脑上所有 HID 设备，标出 QuadCast S 候选，并检查 NGENUITY 是否在运行。
+/// 设备诊断（M0）：列出电脑上所有 HID 设备，标出 QuadCast S 候选，并检查 NGENUITY 是否在运行。
 /// 不向任何设备发送数据。唯一的"动作"是对候选设备做打开测试：打开后马上关闭，对麦克风没有影响。
 /// </summary>
 /// <remarks>
@@ -14,18 +13,6 @@ namespace HyperLight.Device;
 /// </remarks>
 internal static class HidDiagnostics
 {
-    /// <summary>
-    /// 搜索 NGENUITY 进程用的关键字（不区分大小写）。
-    /// M0 先模糊搜索；M1 再按这次查到的真实进程名精确检测。
-    /// </summary>
-    private static readonly string[] ngenuityKeywords = { "ngenuity", "hyperx" };
-
-    /// <summary>
-    /// QuadCast S 协议的包是 64 字节，Windows 发送时前面要多加 1 字节报告编号，
-    /// 所以真正用来控制灯光的那个设备节点，Feature 报告长度应该是 65。
-    /// </summary>
-    private const int expectedFeatureLength = 65;
-
     /// <summary>生成完整的诊断报告文本。本方法不会抛出异常。</summary>
     public static string BuildReport()
     {
@@ -43,7 +30,7 @@ internal static class HidDiagnostics
     private static void AppendHeader(StringBuilder report)
     {
         string bits = Environment.Is64BitOperatingSystem ? "64" : "32";
-        report.AppendLine("HyperLight 设备诊断（M0）");
+        report.AppendLine("HyperLight 设备诊断");
         report.AppendLine($"时间：{DateTime.Now:yyyy-MM-dd HH:mm:ss}");
         report.AppendLine($"系统：{Environment.OSVersion.VersionString}（{bits} 位）");
     }
@@ -94,7 +81,7 @@ internal static class HidDiagnostics
 
         int quadcastCount = candidates.Count(info => info.Match == MicMatch.QuadcastS);
         report.AppendLine($"共 {devices.Count} 个，其中 QuadCast S 候选 {quadcastCount} 个");
-        report.AppendLine("标记：★ 已知的 QuadCast S    ○ 其他 HyperX 麦克风（不是目标）    △ 厂商编号对得上，但产品编号不在表里");
+        report.AppendLine("标记：★ 已知的 QuadCast S    ○ 其他 HyperX 设备（不是目标）    △ 厂商编号对得上，但产品编号不在表里");
         report.AppendLine();
 
         if (quadcastCount == 0)
@@ -135,8 +122,8 @@ internal static class HidDiagnostics
 
     private static void AppendCandidate(StringBuilder report, HidDeviceInfo info)
     {
-        string featureHint = info.Match == MicMatch.QuadcastS && info.FeatureLength == expectedFeatureLength
-            ? "    ← 正好是 65，M1 很可能就用这个节点"
+        string featureHint = QuadcastMic.IsControlNode(info.Id, info.FeatureLength)
+            ? "    ← 灯光控制节点（本工具用这个）"
             : "";
 
         report.AppendLine($"{MatchLabel(info)}  {info.Id}  {info.ProductName}");
@@ -153,12 +140,11 @@ internal static class HidDiagnostics
     private static void AppendNgenuityProcesses(StringBuilder report)
     {
         report.AppendLine("================= NGENUITY 进程检查 =================");
-        report.AppendLine($"（搜索名字里带 {string.Join(" 或 ", ngenuityKeywords)} 的进程，不区分大小写）");
 
-        Process[] processes;
+        IReadOnlyList<NgenuityProcess.Info> running;
         try
         {
-            processes = Process.GetProcesses();
+            running = NgenuityProcess.FindRunning();
         }
         catch (Exception ex)
         {
@@ -166,45 +152,19 @@ internal static class HidDiagnostics
             return;
         }
 
-        try
+        if (running.Count == 0)
         {
-            var lines = new List<string>();
-            foreach (Process process in processes)
-            {
-                string name = SafeText(() => process.ProcessName);
-                bool isMatch = ngenuityKeywords.Any(keyword => name.Contains(keyword, StringComparison.OrdinalIgnoreCase));
-                if (!isMatch)
-                {
-                    continue;
-                }
-
-                string id = SafeText(() => process.Id.ToString());
-                string path = SafeText(() => process.MainModule?.FileName);
-                lines.Add($"  {name}    进程号 {id}    路径：{path}");
-            }
-
-            if (lines.Count == 0)
-            {
-                report.AppendLine("没有找到。");
-                return;
-            }
-
-            report.AppendLine($"找到 {lines.Count} 个：");
-            lines.Sort(StringComparer.OrdinalIgnoreCase);
-            foreach (string line in lines)
-            {
-                report.AppendLine(line);
-            }
-            report.AppendLine("提示：从 M1 开始，运行本工具前必须完全退出 NGENUITY（两个程序会抢麦克风）。");
+            report.AppendLine("没有在运行。");
+            return;
         }
-        finally
+
+        report.AppendLine($"正在运行（{running.Count} 个进程）：");
+        foreach (NgenuityProcess.Info process in running)
         {
-            // Process 对象占用系统句柄，用完必须释放
-            foreach (Process process in processes)
-            {
-                process.Dispose();
-            }
+            report.AppendLine($"  {process.Name}    进程号 {process.Id}    路径：{process.Path}");
         }
+
+        report.AppendLine("提示：发颜色之前必须完全退出 NGENUITY（两个程序会同时发数据，灯会乱闪）。");
     }
 
     // ───────────────────────── 读取单个设备 ─────────────────────────

@@ -6,7 +6,8 @@ namespace HyperLight;
 
 /// <summary>
 /// 程序入口：按命令行参数分发命令。
-/// M0 只有 list 命令。不带参数运行（比如双击 exe）时默认执行 list，结束后等你按回车，防止窗口一闪就关。
+/// 现有命令：list（M0 设备诊断）、color（M1 固定颜色测试）。
+/// 不带参数运行（比如双击 exe）时默认执行 list，结束后等你按回车，防止窗口一闪就关。
 /// </summary>
 internal static class Program
 {
@@ -23,6 +24,7 @@ internal static class Program
             exitCode = command switch
             {
                 "list" => RunList(),
+                "color" => ColorCommand.Run(args[1..]),
                 "help" or "-h" or "--help" or "/?" => PrintUsage(),
                 _ => PrintUnknownCommand(command),
             };
@@ -71,6 +73,11 @@ internal static class Program
     {
         Console.WriteLine("用法：HyperLight.exe <命令>");
         Console.WriteLine("  list   列出所有 HID 设备，找出 QuadCast S，并检查 NGENUITY 是否在运行（不带命令时默认执行这个）");
+        foreach (string line in ColorCommand.UsageLines)
+        {
+            Console.WriteLine(line);
+        }
+
         Console.WriteLine("  help   显示这段说明");
         return 0;
     }
