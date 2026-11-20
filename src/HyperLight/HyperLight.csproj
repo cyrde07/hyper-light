@@ -8,6 +8,8 @@
     <UseWindowsForms>true</UseWindowsForms>
     <RootNamespace>HyperLight</RootNamespace>
     <AssemblyName>HyperLight</AssemblyName>
+    <!-- 程序图标：exe 文件、桌面快捷方式、任务栏上显示的图标（托盘里的小圆点是程序运行时另外画的，显示当前颜色） -->
+    <ApplicationIcon>app.ico</ApplicationIcon>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <!-- 编译警告一律当成错误，逼代码保持干净 -->
