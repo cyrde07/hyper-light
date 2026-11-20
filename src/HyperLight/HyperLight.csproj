@@ -13,6 +13,8 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <!-- 允许在非 Windows 电脑上编译（云端检查用），不影响在 Windows 上运行 -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <!-- 允许极少量的 unsafe 代码：截壁纸时直接读 Windows 分配的像素内存，不复制 30 多 MB -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>

@@ -3,7 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using HyperLight.Device;
 
-namespace HyperLight;
+namespace HyperLight.Commands;
 
 /// <summary>
 /// color 命令（M1 测试用）：不停地给麦克风发一个固定颜色，直到到达指定秒数或按 Ctrl+C。

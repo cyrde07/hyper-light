@@ -15,7 +15,7 @@
 |---|---|---|
 | M0 | 列出 HID 设备，确认 QuadCast S 的 VID / PID | 完成：03F0:028C，接口 0 是灯光控制节点 |
 | M1 | 发一个固定颜色给麦克风，确认能控制 | 完成：每秒 30 帧稳定；停止发送后麦克风立刻恢复自带灯效 |
-| M2 | 取壁纸颜色，实时发给麦克风 | 方案调整中：实测 Wallpaper Engine 取的是壁纸本身而不是整个屏幕，正在测试能否单独截壁纸窗口（probe） |
+| M2 | 截 Wallpaper Engine 的壁纸窗口取色，实时发给麦克风 | 进行中：已写好 `sync` 命令，等待验收 |
 | M3 | 调色：提高饱和度接近键盘颜色；上下两个灯区分别取色 | 未开始 |
 | M4 | 托盘程序：开机自启（和其他设备一起亮）、暂停 / 恢复、退出时灯恢复正常 | 未开始 |
 
@@ -46,6 +46,32 @@ HyperLight.exe color <上灯区颜色> [下灯区颜色] [--interval 毫秒] [--
 
 脚本里只写英文：Windows 命令行默认按 GBK 读取 .bat，写 UTF-8 中文可能导致命令错乱。
 
+### 壁纸同步（M2）
+
+```
+HyperLight.exe sync
+```
+
+截 Wallpaper Engine 的壁纸取平均色，持续发给麦克风，按 Ctrl+C 停止。测试脚本：`manual-tests/m2/sync.bat`。
+
+- **为什么截壁纸窗口，不截整个屏幕**：实测 Wallpaper Engine 给 Razer 设备的颜色取自壁纸本身，开着软件也不变；截整个屏幕会截到软件。
+- **怎么截**：用 PrintWindow（完整内容模式）截壁纸的宿主窗口，壁纸被窗口挡住也能截到。会带上桌面图标，实测对颜色影响很小。
+- **两个线程**：截图线程每 0.5 秒截一次；发送线程每 33 毫秒发一次。麦克风一停止接收就恢复自带灯效，所以发送不能被截图卡住。
+- **不闪眼睛**：颜色变化小于门槛就当没变；真的变了就渐变过去。
+- **找不到壁纸**（Wallpaper Engine 没开）：3 秒后停止发送，麦克风回到自带灯效；Wallpaper Engine 再打开，自动恢复。
+
+设置保存在 exe 旁边的 `hyperlight.json`，第一次运行时自动生成，每一项上面都有中文说明。改完重新启动程序生效。
+
+| 配置项 | 默认值 | 含义 |
+|---|---|---|
+| `captureIntervalMs` | 500 | 截图间隔（毫秒） |
+| `sendIntervalMs` | 33 | 发送间隔（毫秒），范围 20～100 |
+| `changeThreshold` | 12 | 颜色变化门槛（0～255），越大越不容易变 |
+| `fadeMs` | 400 | 渐变时间（毫秒），0 表示立刻切换 |
+| `wallpaperLostGraceMs` | 3000 | 找不到壁纸多久后停止发送（毫秒） |
+
+（配置项的默认值和说明以 `src/HyperLight/Config/AppConfig.cs` 为准。）
+
 ### 壁纸窗口截图测试（方案 A）
 
 `manual-tests/m2-probe/probe-wallpaper.bat`（对应 `HyperLight.exe probe`）：找到 Wallpaper Engine 画壁纸的窗口，用几种方法各截两次，
@@ -60,15 +86,24 @@ HyperLight.exe color <上灯区颜色> [下灯区颜色] [--interval 毫秒] [--
 ```
 hyper-light/
 ├─ HyperLight.sln
-├─ manual-tests/        手动测试脚本（m1：固定颜色；m2-probe：壁纸窗口截图测试）
+├─ manual-tests/        手动测试脚本（m1：固定颜色；m2：壁纸同步；m2-probe：壁纸窗口截图测试）
 └─ src/HyperLight/
    ├─ Program.cs        入口：按命令行参数分发命令
-   ├─ ColorCommand.cs   color 命令（M1 固定颜色测试）
+   ├─ SyncEngine.cs     同步引擎：截图线程 + 发送线程（M4 托盘也用它）
    ├─ Rgb.cs            颜色类型（各模块共用）
-   ├─ Commands/
+   ├─ Commands/         命令
+   │  ├─ ColorCommand.cs       color 命令（M1 固定颜色测试）
+   │  ├─ SyncCommand.cs        sync 命令（M2 壁纸同步）
    │  └─ ProbeCommand.cs       probe 命令（方案 A 测试）
+   ├─ Config/
+   │  └─ AppConfig.cs          配置项、默认值、范围、说明（全项目唯一定义配置的地方）
+   ├─ ColorProcessing/  颜色处理
+   │  ├─ ColorAverager.cs      算平均色（隔几个像素取一个点）
+   │  └─ ColorChangeFilter.cs  变化门槛 + 渐变
    ├─ Capture/          截图
    │  ├─ NativeMethods.cs      Windows 系统函数声明
+   │  ├─ WallpaperWindowFinder.cs  找壁纸窗口（全项目唯一写"哪个窗口是壁纸"的地方）
+   │  ├─ WallpaperCapturer.cs  截壁纸（内存反复使用）
    │  └─ WallpaperWindowProbe.cs  方案 A 测试：找壁纸窗口、几种方法截图、自动判断
    └─ Device/           设备通信
       ├─ UsbId.cs              USB 设备编号（VID:PID）
@@ -79,7 +114,7 @@ hyper-light/
       └─ HidDiagnostics.cs     设备诊断（M0）
 ```
 
-以后的阶段会加 `ColorProcessing/`（颜色处理）、`Config/`（配置）、`Tray/`（托盘）。
+M4 会加 `Tray/`（托盘）。
 
 ## 编码规范
 
@@ -87,6 +122,7 @@ hyper-light/
 - `.bat`：纯英文 + CRLF。
 - 注释和说明用中文；必须写英文的地方附中文翻译。
 - 编译警告一律当成错误（`TreatWarningsAsErrors`）。
+- 只有截图读像素那一处用了 unsafe（直接读 Windows 分配的内存，不复制），其他地方不用。
 
 ## 编译
 

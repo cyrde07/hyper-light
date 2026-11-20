@@ -1,5 +1,6 @@
 ﻿using System.Security;
 using System.Text;
+using HyperLight.Capture;
 using HyperLight.Commands;
 using HyperLight.Device;
 
@@ -7,7 +8,7 @@ namespace HyperLight;
 
 /// <summary>
 /// 程序入口：按命令行参数分发命令。
-/// 现有命令：list（M0 设备诊断）、color（M1 固定颜色测试）、probe（方案 A 测试）。
+/// 现有命令：list（M0 设备诊断）、color（M1 固定颜色测试）、probe（方案 A 测试）、sync（M2 壁纸同步）。
 /// 不带参数运行（比如双击 exe）时默认执行 list，结束后等你按回车，防止窗口一闪就关。
 /// </summary>
 internal static class Program
@@ -15,6 +16,7 @@ internal static class Program
     private static int Main(string[] args)
     {
         TryUseUtf8Console();
+        TryEnableDpiAwareness();
 
         bool startedWithoutArgs = args.Length == 0;
         string command = startedWithoutArgs ? "list" : args[0].Trim().ToLowerInvariant();
@@ -27,6 +29,7 @@ internal static class Program
                 "list" => RunList(),
                 "color" => ColorCommand.Run(args[1..]),
                 "probe" => ProbeCommand.Run(),
+                "sync" => SyncCommand.Run(),
                 "help" or "-h" or "--help" or "/?" => PrintUsage(),
                 _ => PrintUnknownCommand(command),
             };
@@ -75,7 +78,7 @@ internal static class Program
     {
         Console.WriteLine("用法：HyperLight.exe <命令>");
         Console.WriteLine("  list   列出所有 HID 设备，找出 QuadCast S，并检查 NGENUITY 是否在运行（不带命令时默认执行这个）");
-        foreach (string line in ColorCommand.UsageLines.Concat(ProbeCommand.UsageLines))
+        foreach (string line in ColorCommand.UsageLines.Concat(ProbeCommand.UsageLines).Concat(SyncCommand.UsageLines))
         {
             Console.WriteLine(line);
         }
@@ -102,6 +105,22 @@ internal static class Program
         catch (Exception ex) when (ex is IOException or SecurityException)
         {
             // 设置失败只会影响中文显示，不影响功能
+        }
+    }
+
+    /// <summary>
+    /// 让 Windows 按真实像素报告窗口大小（4K 屏开了缩放也一样）。截壁纸要用到，必须在读取任何窗口信息之前设置。
+    /// 设置失败只影响截壁纸的尺寸判断，不影响其他功能。
+    /// </summary>
+    private static void TryEnableDpiAwareness()
+    {
+        try
+        {
+            NativeMethods.SetProcessDpiAwarenessContext(NativeMethods.DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
+        {
+            // 不是 Windows（只有云端测试时会这样），或者系统太旧不支持
         }
     }
 

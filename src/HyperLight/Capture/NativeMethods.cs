@@ -30,6 +30,12 @@ internal static class NativeMethods
     /// <summary>GetAncestor：取最顶层的祖先窗口。</summary>
     public const uint GA_ROOT = 2;
 
+    /// <summary>CreateDIBSection：像素不压缩，直接按 RGB 存。</summary>
+    public const uint BI_RGB = 0;
+
+    /// <summary>CreateDIBSection：颜色直接是 RGB 值，不用调色板。</summary>
+    public const uint DIB_RGB_COLORS = 0;
+
     /// <summary>
     /// 告诉 Windows 本程序自己处理高分辨率缩放（Per-Monitor V2）。
     /// 不设的话，4K 屏开了 150% 缩放时，Windows 会把窗口大小"缩水"后报给我们，截图也会被缩放。
@@ -50,6 +56,48 @@ internal static class NativeMethods
 
         public readonly int Height => Bottom - Top;
     }
+
+    /// <summary>位图信息头（描述一块像素内存的尺寸和格式）。</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct BITMAPINFOHEADER
+    {
+        public uint biSize;
+        public int biWidth;
+        public int biHeight;
+        public ushort biPlanes;
+        public ushort biBitCount;
+        public uint biCompression;
+        public uint biSizeImage;
+        public int biXPelsPerMeter;
+        public int biYPelsPerMeter;
+        public uint biClrUsed;
+        public uint biClrImportant;
+    }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool IsWindow(IntPtr hWnd);
+
+    [DllImport("gdi32.dll")]
+    public static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+
+    /// <summary>
+    /// 创建一块可以直接读写像素的位图内存。
+    /// 32 位、不压缩的位图不需要调色板，所以这里只传信息头（官方允许的用法）。
+    /// </summary>
+    [DllImport("gdi32.dll")]
+    public static extern IntPtr CreateDIBSection(IntPtr hdc, ref BITMAPINFOHEADER pbmi, uint usage, out IntPtr ppvBits, IntPtr hSection, uint offset);
+
+    [DllImport("gdi32.dll")]
+    public static extern IntPtr SelectObject(IntPtr hdc, IntPtr h);
+
+    [DllImport("gdi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool DeleteObject(IntPtr ho);
+
+    [DllImport("gdi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool DeleteDC(IntPtr hdc);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

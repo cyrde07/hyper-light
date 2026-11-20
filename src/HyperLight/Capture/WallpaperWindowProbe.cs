@@ -20,12 +20,6 @@ namespace HyperLight.Capture;
 /// </remarks>
 internal static class WallpaperWindowProbe
 {
-    /// <summary>Wallpaper Engine 画壁纸的进程名开头（wallpaper32 / wallpaper64 / webwallpaper32 等）。</summary>
-    private static readonly string[] wallpaperProcessPrefixes = { "wallpaper", "webwallpaper" };
-
-    /// <summary>桌面最底层的宿主窗口类名。Wallpaper Engine 会把自己的窗口挂到它们下面。</summary>
-    private static readonly string[] desktopHostClasses = { "Progman", "WorkerW" };
-
     /// <summary>存图和比较用的缩略图宽度（像素）。4K 原图一张 30 多 MB，没必要存原图。</summary>
     private const int thumbnailWidth = 480;
 
@@ -68,22 +62,21 @@ internal static class WallpaperWindowProbe
 
     private static void RunCore(string outputFolder, StringBuilder report)
     {
-        // 必须在读取任何窗口信息之前设置，否则 4K 缩放下拿到的尺寸是"缩水"的
-        bool dpiAware = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        // 高分辨率缩放感知由 Program 启动时统一设置，这里拿到的就是真实像素
         int screenWidth = GetSystemMetrics(SM_CXSCREEN);
         int screenHeight = GetSystemMetrics(SM_CYSCREEN);
 
         report.AppendLine("HyperLight 方案 A 测试：截 Wallpaper Engine 的壁纸窗口");
         report.AppendLine($"时间：{DateTime.Now:yyyy-MM-dd HH:mm:ss}");
         report.AppendLine($"系统：{Environment.OSVersion.VersionString}");
-        report.AppendLine($"主显示器：{screenWidth}x{screenHeight}    高分辨率缩放设置：{(dpiAware ? "成功" : "失败（尺寸可能不准）")}");
+        report.AppendLine($"主显示器：{screenWidth}x{screenHeight}");
         report.AppendLine($"截图保存在：{outputFolder}");
         report.AppendLine();
 
         // ── 1. Wallpaper Engine 的进程 ──
         Dictionary<int, string> processNames = ReadProcessNames();
         var wallpaperPids = processNames
-            .Where(pair => wallpaperProcessPrefixes.Any(prefix => pair.Value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
+            .Where(pair => WallpaperWindowFinder.IsWallpaperProcessName(pair.Value))
             .ToDictionary(pair => pair.Key, pair => pair.Value);
 
         report.AppendLine("==================== Wallpaper Engine 进程 ====================");
@@ -104,7 +97,7 @@ internal static class WallpaperWindowProbe
         List<WindowInfo> windows = EnumerateAllWindows(processNames);
         IntPtr desktop = GetDesktopWindow();
         List<WindowInfo> desktopHosts = windows
-            .Where(w => w.Parent == desktop && desktopHostClasses.Contains(w.ClassName, StringComparer.OrdinalIgnoreCase))
+            .Where(w => w.Parent == desktop && WallpaperWindowFinder.IsDesktopHostClass(w.ClassName))
             .ToList();
         List<WindowInfo> wallpaperWindows = windows.Where(w => wallpaperPids.ContainsKey(w.ProcessId)).ToList();
 
@@ -128,13 +121,18 @@ internal static class WallpaperWindowProbe
             report.AppendLine($"  {window.Describe()}    {parentNote}");
         }
 
+        // 同步程序（sync）实际会截哪个窗口：和下面的测试用的是同一套判断规则
+        WallpaperTarget? syncTarget = WallpaperWindowFinder.Find();
+        report.AppendLine(syncTarget is WallpaperTarget syncFound
+            ? $"同步程序会截的窗口：0x{syncFound.CaptureWindow.ToInt64():X}（{syncFound.Width}x{syncFound.Height}），壁纸窗口 0x{syncFound.WallpaperWindow.ToInt64():X}"
+            : "同步程序会截的窗口：没找到");
         report.AppendLine();
 
         // ── 3. 选出要截的窗口：大小像壁纸的 Wallpaper Engine 窗口，再加上它的父窗口和最顶层祖先窗口 ──
         // 子窗口的画面有时是画在上层窗口上的，所以上层窗口也截一次。
         // Windows 11 24H2 起桌面结构变了：壁纸宿主窗口 WorkerW 挂在 Progman 下面，所以父窗口和顶层祖先可能不是同一个。
         List<WindowInfo> wallpaperSized = wallpaperWindows
-            .Where(w => w.Visible && w.Rect.Width >= screenWidth / 2 && w.Rect.Height >= screenHeight / 2)
+            .Where(w => WallpaperWindowFinder.LooksLikeWallpaper(w.ProcessName, w.Visible, w.Rect.Width, w.Rect.Height, screenWidth, screenHeight))
             .ToList();
         var targets = new List<WindowInfo>(wallpaperSized);
         foreach (WindowInfo window in wallpaperSized)
