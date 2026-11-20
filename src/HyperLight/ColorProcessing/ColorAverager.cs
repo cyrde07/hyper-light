@@ -12,41 +12,51 @@ internal static class ColorAverager
     /// <summary>每个像素占 4 字节，顺序是 B、G、R、未使用（Windows 截图的标准格式）。</summary>
     private const int bytesPerPixel = 4;
 
-    /// <summary>
-    /// 算麦克风两个灯区的颜色。
-    /// splitZones 为 true：上灯区取上半部分的平均色，下灯区取下半部分；为 false：两个灯区都用整张图的平均色。
-    /// </summary>
+    /// <summary>按取色方式算麦克风两个灯区的颜色。</summary>
     /// <exception cref="ArgumentException">尺寸不对，或者像素数据比尺寸要求的少（这是程序写错了，不是设备问题）。</exception>
-    public static ZoneColors AverageZones(ReadOnlySpan<byte> pixels, int width, int height, bool splitZones)
+    public static ZoneColors AverageZones(ReadOnlySpan<byte> pixels, int width, int height, ZoneLayout layout)
     {
-        if (!splitZones || height < 2)
+        switch (layout)
         {
-            return ZoneColors.Same(AverageRows(pixels, width, height, 0, height));
-        }
+            case ZoneLayout.TopBottom when height >= 2:
+                int middleRow = height / 2;
+                return new ZoneColors(
+                    Upper: AverageRegion(pixels, width, height, 0, width, 0, middleRow),
+                    Lower: AverageRegion(pixels, width, height, 0, width, middleRow, height));
 
-        int middle = height / 2;
-        return new ZoneColors(
-            Upper: AverageRows(pixels, width, height, 0, middle),
-            Lower: AverageRows(pixels, width, height, middle, height));
+            case ZoneLayout.LeftRight when width >= 2:
+                int middleColumn = width / 2;
+                return new ZoneColors(
+                    Upper: AverageRegion(pixels, width, height, 0, middleColumn, 0, height),
+                    Lower: AverageRegion(pixels, width, height, middleColumn, width, 0, height));
+
+            default:
+                // 整张壁纸；或者图片太小没法分两半（几乎不会发生）
+                return ZoneColors.Same(Average(pixels, width, height));
+        }
     }
 
     /// <summary>算整张图的平均色。pixels 是从上到下逐行排列的像素，每行 width × 4 字节。</summary>
     /// <exception cref="ArgumentException">尺寸不对，或者像素数据比尺寸要求的少。</exception>
     public static Rgb Average(ReadOnlySpan<byte> pixels, int width, int height) =>
-        AverageRows(pixels, width, height, 0, height);
+        AverageRegion(pixels, width, height, 0, width, 0, height);
 
-    /// <summary>算第 firstRow 行（含）到第 endRow 行（不含）之间的平均色。</summary>
-    /// <exception cref="ArgumentException">尺寸或行范围不对，或者像素数据比尺寸要求的少。</exception>
-    public static Rgb AverageRows(ReadOnlySpan<byte> pixels, int width, int height, int firstRow, int endRow)
+    /// <summary>
+    /// 算一个矩形区域的平均色：第 firstColumn 列（含）到 endColumn 列（不含），第 firstRow 行（含）到 endRow 行（不含）。
+    /// </summary>
+    /// <exception cref="ArgumentException">尺寸或区域范围不对，或者像素数据比尺寸要求的少。</exception>
+    public static Rgb AverageRegion(
+        ReadOnlySpan<byte> pixels, int width, int height, int firstColumn, int endColumn, int firstRow, int endRow)
     {
         if (width <= 0 || height <= 0)
         {
             throw new ArgumentException($"图片尺寸不对：{width}x{height}");
         }
 
-        if (firstRow < 0 || endRow > height || firstRow >= endRow)
+        if (firstColumn < 0 || endColumn > width || firstColumn >= endColumn
+            || firstRow < 0 || endRow > height || firstRow >= endRow)
         {
-            throw new ArgumentException($"行范围不对：{firstRow}～{endRow}（图片高 {height}）");
+            throw new ArgumentException($"区域范围不对：列 {firstColumn}～{endColumn}，行 {firstRow}～{endRow}（图片 {width}x{height}）");
         }
 
         long required = (long)width * height * bytesPerPixel;
@@ -60,7 +70,7 @@ internal static class ColorAverager
         for (int y = firstRow + (sampleStep / 2); y < endRow; y += sampleStep)
         {
             int rowStart = y * rowBytes;
-            for (int x = sampleStep / 2; x < width; x += sampleStep)
+            for (int x = firstColumn + (sampleStep / 2); x < endColumn; x += sampleStep)
             {
                 int i = rowStart + (x * bytesPerPixel);
                 sumB += pixels[i];
@@ -70,10 +80,10 @@ internal static class ColorAverager
             }
         }
 
-        // 范围比取样间隔还小时（几乎不会发生），直接取范围正中间那个像素
+        // 区域比取样间隔还小时（几乎不会发生），直接取区域正中间那个像素
         if (count == 0)
         {
-            int center = (((firstRow + endRow) / 2) * rowBytes) + ((width / 2) * bytesPerPixel);
+            int center = (((firstRow + endRow) / 2) * rowBytes) + (((firstColumn + endColumn) / 2) * bytesPerPixel);
             return new Rgb(pixels[center + 2], pixels[center + 1], pixels[center]);
         }
 

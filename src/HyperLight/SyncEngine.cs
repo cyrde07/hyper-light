@@ -157,21 +157,22 @@ internal sealed class SyncEngine : IDisposable
             TimeSpan roundStart = clock.Elapsed;
             try
             {
-                if (roundStart >= nextNgenuityCheck)
-                {
-                    nextNgenuityCheck = roundStart + ngenuityCheckInterval;
-                    bool running = NgenuityProcess.IsRunning();
-                    UpdateStatus(s => s with { NgenuityRunning = running });
-                }
-
                 if (paused)
                 {
-                    // 暂停时不截图；把"上次成功"挪到现在，免得恢复的瞬间被当成"很久没找到壁纸"
+                    // 暂停时什么都不做（不截图、不查 NGENUITY）；
+                    // 把"上次成功"挪到现在，免得恢复的瞬间被当成"很久没找到壁纸"
                     lastSuccess = clock.Elapsed;
                     UpdateStatus(s => s with { WallpaperState = "已暂停" });
                 }
                 else
                 {
+                    if (roundStart >= nextNgenuityCheck)
+                    {
+                        nextNgenuityCheck = roundStart + ngenuityCheckInterval;
+                        bool running = NgenuityProcess.IsRunning();
+                        UpdateStatus(s => s with { NgenuityRunning = running });
+                    }
+
                     target = CaptureOnce(capturer, target, ref lastSuccess, lostGrace);
                 }
             }
@@ -205,7 +206,7 @@ internal sealed class SyncEngine : IDisposable
                 return null;
             }
 
-            colors = Enhance(ColorAverager.AverageZones(capturer.Pixels, capturer.Width, capturer.Height, config.SplitZones));
+            colors = Enhance(ColorAverager.AverageZones(capturer.Pixels, capturer.Width, capturer.Height, config.ZoneLayout));
             target = found;
         }
         finally

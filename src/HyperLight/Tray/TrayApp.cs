@@ -9,7 +9,7 @@ namespace HyperLight.Tray;
 
 /// <summary>
 /// 托盘程序（M4）：屏幕右下角一个小圆点图标，上下两半显示麦克风当前的两个颜色。
-/// 右键菜单：状态、暂停 / 恢复、增强颜色、上下分区、开机自启、打开设置文件、重新读取设置、退出。
+/// 右键菜单：状态、暂停 / 恢复、增强颜色、取色方式、开机自启、打开设置文件、重新读取设置、退出。
 /// </summary>
 /// <remarks>
 /// 界面只在主线程（界面线程）里操作。同步工作在 <see cref="SyncEngine"/> 自己的线程里进行，
@@ -31,7 +31,8 @@ internal sealed class TrayApp : ApplicationContext
     private readonly ToolStripMenuItem statusItem;
     private readonly ToolStripMenuItem pauseItem;
     private readonly ToolStripMenuItem boostItem;
-    private readonly ToolStripMenuItem splitItem;
+    private readonly ToolStripMenuItem layoutMenu;
+    private readonly Dictionary<ZoneLayout, ToolStripMenuItem> layoutItems = new();
     private readonly ToolStripMenuItem autoStartItem;
     private readonly System.Windows.Forms.Timer refreshTimer;
 
@@ -76,7 +77,13 @@ internal sealed class TrayApp : ApplicationContext
         statusItem = new ToolStripMenuItem("正在启动…") { Enabled = false };
         pauseItem = new ToolStripMenuItem("暂停同步", null, (_, _) => TogglePause());
         boostItem = new ToolStripMenuItem("增强颜色（模仿 Wallpaper Engine）", null, (_, _) => ToggleBoost());
-        splitItem = new ToolStripMenuItem("上下灯区分开取色", null, (_, _) => ToggleSplit());
+        layoutMenu = new ToolStripMenuItem("取色方式");
+        foreach (ZoneLayout layout in new[] { ZoneLayout.TopBottom, ZoneLayout.LeftRight, ZoneLayout.Whole })
+        {
+            var item = new ToolStripMenuItem(ZoneLayoutText.Of(layout), null, (_, _) => SelectLayout(layout));
+            layoutItems[layout] = item;
+            layoutMenu.DropDownItems.Add(item);
+        }
         autoStartItem = new ToolStripMenuItem("开机自启", null, (_, _) => ToggleAutoStart());
 
         menu = new ContextMenuStrip();
@@ -86,7 +93,7 @@ internal sealed class TrayApp : ApplicationContext
             new ToolStripSeparator(),
             pauseItem,
             boostItem,
-            splitItem,
+            layoutMenu,
             new ToolStripSeparator(),
             autoStartItem,
             new ToolStripMenuItem("打开设置文件", null, (_, _) => OpenConfigFile()),
@@ -185,7 +192,10 @@ internal sealed class TrayApp : ApplicationContext
     private void UpdateCheckmarks()
     {
         boostItem.Checked = config.BoostColors;
-        splitItem.Checked = config.SplitZones;
+        foreach ((ZoneLayout layout, ToolStripMenuItem item) in layoutItems)
+        {
+            item.Checked = layout == config.ZoneLayout;
+        }
         autoStartItem.Checked = IsAutoStartEnabledSafe();
     }
 
@@ -199,7 +209,13 @@ internal sealed class TrayApp : ApplicationContext
 
     private void ToggleBoost() => ApplyConfig(config with { BoostColors = !config.BoostColors });
 
-    private void ToggleSplit() => ApplyConfig(config with { SplitZones = !config.SplitZones });
+    private void SelectLayout(ZoneLayout layout)
+    {
+        if (layout != config.ZoneLayout)
+        {
+            ApplyConfig(config with { ZoneLayout = layout });
+        }
+    }
 
     /// <summary>改设置：先保存到文件，再用新设置重启同步引擎。</summary>
     private void ApplyConfig(AppConfig newConfig)

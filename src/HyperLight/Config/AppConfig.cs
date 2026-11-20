@@ -2,6 +2,8 @@
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using HyperLight.ColorProcessing;
 
 namespace HyperLight.Config;
 
@@ -36,18 +38,24 @@ internal sealed record AppConfig
     [Description("增强倍数：增强颜色打开时，饱和度乘以多少。1.0 表示不变，越大颜色越鲜艳。默认 1.5。范围 1.0～3.0")]
     public double SaturationBoost { get; init; } = 1.5;
 
-    [Description("上下灯区分开取色：true 表示上灯区取壁纸上半部分、下灯区取下半部分；false 表示两个灯区都用整张壁纸的平均色。默认 true")]
-    public bool SplitZones { get; init; } = true;
+    [Description("取色方式：topBottom 上下（上半张→上灯区，下半张→下灯区）；leftRight 左右（左半张→上灯区，右半张→下灯区）；whole 整张壁纸（两个灯区同色）。默认 topBottom")]
+    public ZoneLayout ZoneLayout { get; init; } = ZoneLayout.TopBottom;
 
     /// <summary>配置文件的位置：exe 旁边的 hyperlight.json。</summary>
     public static string DefaultPath => Path.Combine(AppContext.BaseDirectory, "hyperlight.json");
+
+    /// <summary>取色方式这类选项在文件里写成文字（比如 "leftRight"），不写成数字。</summary>
+    private static readonly JsonStringEnumConverter enumAsText = new(JsonNamingPolicy.CamelCase, allowIntegerValues: false);
 
     private static readonly JsonSerializerOptions readOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         ReadCommentHandling = JsonCommentHandling.Skip,
         AllowTrailingCommas = true,
+        Converters = { enumAsText },
     };
+
+    private static readonly JsonSerializerOptions writeValueOptions = new() { Converters = { enumAsText } };
 
     /// <summary>
     /// 读取配置。文件不存在就用默认值，并生成一份带说明的配置文件；
@@ -111,7 +119,7 @@ internal sealed record AppConfig
         }
     }
 
-    /// <summary>把每一项的数值检查一遍，超出范围的改回默认值。开关（true / false）不需要检查。</summary>
+    /// <summary>把每一项的数值检查一遍，超出范围的改回默认值。开关（true / false）和取色方式（读取时已检查）不需要再检查。</summary>
     private AppConfig Validated(List<string> notes)
     {
         var defaults = new AppConfig();
@@ -157,7 +165,7 @@ internal sealed record AppConfig
             string description = property.GetCustomAttribute<DescriptionAttribute>()?.Description ?? "";
 
             // 用 json 序列化器写数值，保证格式正确（比如 true 是小写、小数点不受系统语言影响）
-            string value = JsonSerializer.Serialize(property.GetValue(config), property.PropertyType);
+            string value = JsonSerializer.Serialize(property.GetValue(config), property.PropertyType, writeValueOptions);
             string comma = i < properties.Length - 1 ? "," : "";
             json.AppendLine($"  // {description}");
             json.AppendLine($"  \"{JsonName(property.Name)}\": {value}{comma}");

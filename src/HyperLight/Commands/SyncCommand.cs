@@ -108,7 +108,7 @@ internal static class SyncCommand
             + $"变化门槛：{config.ChangeThreshold}    渐变：{config.FadeMs} 毫秒");
         Console.WriteLine(
             $"增强颜色：{(config.BoostColors ? $"开（{config.SaturationBoost} 倍）" : "关")}    "
-            + $"上下灯区分开取色：{(config.SplitZones ? "开" : "关")}");
+            + $"取色方式：{ZoneLayoutText.Of(config.ZoneLayout)}");
         Console.WriteLine($"配置文件：{AppConfig.DefaultPath}");
         foreach (string note in notes)
         {
