@@ -1,0 +1,24 @@
+# 编辑器统一设置（Visual Studio / Rider / VS Code 都认这个文件）
+root = true
+
+[*]
+charset = utf-8
+end_of_line = crlf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+# C# 代码、项目文件、解决方案、说明文档：UTF-8 带 BOM
+[*.{cs,csproj,sln,md}]
+charset = utf-8-bom
+
+[*.{csproj,props,targets,json}]
+indent_size = 2
+
+[*.sln]
+indent_style = tab
+
+# Markdown 行尾两个空格表示换行，不能删
+[*.md]
+trim_trailing_whitespace = false

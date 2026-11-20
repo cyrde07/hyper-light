@@ -1,0 +1,13 @@
+# 编译产物
+bin/
+obj/
+publish/
+
+# 编辑器 / IDE 生成的文件
+.vs/
+.idea/
+*.user
+*.suo
+
+# 运行时生成的诊断报告
+hid-list-*.txt

@@ -1,0 +1,22 @@
+# hyper-light - git 文件属性
+# 文本文件取到电脑上时一律用 CRLF（Windows 换行）；git 仓库内部照惯例存 LF。
+# 这样不管在哪台电脑、用什么工具取下来，.cs 文件都是 CRLF。
+# BOM（文件开头的编码标记）git 不会动，原样保留。
+
+* text=auto
+
+*.cs           text eol=crlf
+*.csproj       text eol=crlf
+*.sln          text eol=crlf
+*.props        text eol=crlf
+*.targets      text eol=crlf
+*.json         text eol=crlf
+*.md           text eol=crlf
+*.txt          text eol=crlf
+.editorconfig  text eol=crlf
+.gitattributes text eol=crlf
+.gitignore     text eol=crlf
+
+# 二进制文件（以后的托盘图标等），不做任何换行转换
+*.ico binary
+*.png binary

@@ -1,0 +1,23 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RootNamespace>HyperLight</RootNamespace>
+    <AssemblyName>HyperLight</AssemblyName>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- 编译警告一律当成错误，逼代码保持干净 -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- 只出 64 位 Windows 版本 -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <!-- 允许在非 Windows 电脑上编译（云端检查用），不影响在 Windows 上运行 -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- HidSharp：USB HID 设备通信库，Apache-2.0 许可 -->
+    <PackageReference Include="HidSharp" Version="2.6.4" />
+  </ItemGroup>
+
+</Project>
