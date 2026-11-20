@@ -54,7 +54,8 @@ internal sealed record SyncStatus
 /// </summary>
 internal sealed class SyncEngine : IDisposable
 {
-    private static readonly TimeSpan ngenuityCheckInterval = TimeSpan.FromSeconds(3);
+    /// <summary>多久查一次 NGENUITY。查进程列表会产生不少临时数据，没必要太频繁。</summary>
+    private static readonly TimeSpan ngenuityCheckInterval = TimeSpan.FromSeconds(10);
 
     /// <summary>停止时最多等两个线程收尾多久。</summary>
     private static readonly TimeSpan stopTimeout = TimeSpan.FromSeconds(5);

@@ -32,6 +32,16 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!--
+      给托管内存定上限 64 MB（实际只用几 MB）。
+      不设的话，.NET 会按 CPU 缓存大小决定"攒多少垃圾才清理一次"；
+      7950X3D 这类大缓存 CPU 会攒到四五十 MB，任务管理器里的内存就从 20 MB 慢慢涨到 60 MB。
+      设了上限，垃圾回收会勤快地清理，内存保持在低位。截图用的内存不算在这里面。
+    -->
+    <RuntimeHostConfigurationOption Include="System.GC.HeapHardLimit" Value="67108864" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- HidSharp：USB HID 设备通信库，Apache-2.0 许可 -->
     <PackageReference Include="HidSharp" Version="2.6.4" />
   </ItemGroup>
