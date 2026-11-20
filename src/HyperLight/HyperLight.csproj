@@ -20,6 +20,17 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
+  <!-- 打包设置：自带运行库的单个 exe（对方电脑不用装 .NET） -->
+  <PropertyGroup>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <!-- 不压缩：压缩的话运行时要把程序解压到内存里，多占几十 MB。不压缩 exe 文件会大一些，但只占硬盘 -->
+    <EnableCompressionInSingleFile>false</EnableCompressionInSingleFile>
+    <!-- 关掉后台垃圾回收：这个小程序用不着，省一个后台线程和它的内存 -->
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+  </PropertyGroup>
+
   <ItemGroup>
     <!-- HidSharp：USB HID 设备通信库，Apache-2.0 许可 -->
     <PackageReference Include="HidSharp" Version="2.6.4" />

@@ -180,8 +180,8 @@ hyper-light/
 ## 编译
 
 需要微软官方的 .NET 8 SDK（Windows 上装的就是，带 WinForms 组件；Ubuntu 软件源里的 .NET SDK 缺这个组件，编译不了托盘部分）。
-打包成"自带运行库"的单个 exe（对方电脑不用装 .NET）：
+打包成"自带运行库"的单个 exe（对方电脑不用装 .NET）。打包设置写在 `HyperLight.csproj` 里（不压缩，省运行时内存）：
 
 ```
-dotnet publish src/HyperLight -c Release --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -o publish
+dotnet publish src/HyperLight -c Release -o publish
 ```

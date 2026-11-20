@@ -5,8 +5,9 @@ namespace HyperLight.Capture;
 
 /// <summary>
 /// 截壁纸：用 PrintWindow（完整内容模式）把壁纸的宿主窗口画进一块内存。
-/// 这块内存反复使用，尺寸变了才重建，避免每次截图都新分配 30 多 MB。
-/// 截图不存盘，也不保留旧图：下一次截图直接覆盖这块内存。
+/// 4K 截图要 30 多 MB。调用方读完像素后应马上调用 <see cref="ReleaseBuffer"/> 释放，
+/// 这样两次截图之间（绝大部分时间）这块内存都还给系统，下次截图再申请。
+/// 截图不存盘，也不保留旧图。
 /// 只能在一个线程里使用（不是线程安全的）。
 /// </summary>
 /// <remarks>
@@ -33,7 +34,7 @@ internal sealed class WallpaperCapturer : IDisposable
 
     /// <summary>
     /// 最近一次截图的像素：每个像素 4 字节（B、G、R、未使用），从上到下逐行排列，每行 Width × 4 字节。
-    /// 只在下一次截图之前有效。
+    /// 只在下一次截图或 <see cref="ReleaseBuffer"/> 之前有效。
     /// </summary>
     public ReadOnlySpan<byte> Pixels
     {
@@ -114,7 +115,8 @@ internal sealed class WallpaperCapturer : IDisposable
         return true;
     }
 
-    private void ReleaseBuffer()
+    /// <summary>释放截图内存。读完像素后调用；下次截图时会自动重新申请。可以重复调用。</summary>
+    public void ReleaseBuffer()
     {
         if (memoryDc != IntPtr.Zero && previousBitmap != IntPtr.Zero)
         {

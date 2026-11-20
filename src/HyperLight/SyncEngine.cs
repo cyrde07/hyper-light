@@ -195,13 +195,24 @@ internal sealed class SyncEngine : IDisposable
         }
 
         TimeSpan captureStart = clock.Elapsed;
-        if (target is not WallpaperTarget found || !capturer.TryCapture(found))
+        ZoneColors colors;
+        try
         {
-            HandleWallpaperMissing(lastSuccess, lostGrace);
-            return null;
+            if (target is not WallpaperTarget found || !capturer.TryCapture(found))
+            {
+                HandleWallpaperMissing(lastSuccess, lostGrace);
+                return null;
+            }
+
+            colors = Enhance(ColorAverager.AverageZones(capturer.Pixels, capturer.Width, capturer.Height, config.SplitZones));
+            target = found;
+        }
+        finally
+        {
+            // 读完像素马上释放 30 多 MB 的截图内存，两次截图之间不占着
+            capturer.ReleaseBuffer();
         }
 
-        ZoneColors colors = Enhance(ColorAverager.AverageZones(capturer.Pixels, capturer.Width, capturer.Height, config.SplitZones));
         TimeSpan now = clock.Elapsed;
         bool upperChanged = upperFilter.Offer(colors.Upper, now);
         bool lowerChanged = lowerFilter.Offer(colors.Lower, now);
@@ -218,7 +229,7 @@ internal sealed class SyncEngine : IDisposable
             LastCaptureMs = captureMs,
             LastError = null,
         });
-        return found;
+        return target;
     }
 
     /// <summary>增强颜色打开时，两个灯区都提高饱和度。</summary>
