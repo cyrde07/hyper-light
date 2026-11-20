@@ -1,11 +1,13 @@
 ﻿using System.Diagnostics;
 using System.Runtime.InteropServices;
+using HyperLight.ColorProcessing;
 using HyperLight.Config;
 
 namespace HyperLight.Commands;
 
 /// <summary>
-/// sync 命令（M2）：截 Wallpaper Engine 的壁纸取色，持续发给麦克风，直到按 Ctrl+C。
+/// sync 命令（M2，诊断用）：截 Wallpaper Engine 的壁纸取色，持续发给麦克风，直到按 Ctrl+C。
+/// 和托盘程序用的是同一个同步引擎，区别只是把状态显示在命令行窗口里，方便排查问题。
 /// 窗口里会显示状态变化（找到壁纸、颜色变了、麦克风断开等），
 /// 并且每隔几秒显示一次当前颜色（带色块）、截图耗时、发送帧率、CPU 和内存。
 /// </summary>
@@ -27,6 +29,13 @@ internal static class SyncCommand
     /// <summary>执行 sync 命令。</summary>
     public static int Run()
     {
+        using MicOwnerLock? owner = MicOwnerLock.TryAcquire();
+        if (owner is null)
+        {
+            Console.WriteLine(MicOwnerLock.BusyMessage);
+            return 3;
+        }
+
         bool colorBlocks = TryEnableColorOutput();
         AppConfig config = AppConfig.Load(AppConfig.DefaultPath, out List<string> notes);
         PrintStart(config, notes);
@@ -93,10 +102,13 @@ internal static class SyncCommand
 
     private static void PrintStart(AppConfig config, List<string> notes)
     {
-        Console.WriteLine("HyperLight 壁纸同步（M2）");
+        Console.WriteLine("HyperLight 壁纸同步（诊断模式）");
         Console.WriteLine(
             $"截图：每 {config.CaptureIntervalMs} 毫秒一次    发送：每 {config.SendIntervalMs} 毫秒一次    "
             + $"变化门槛：{config.ChangeThreshold}    渐变：{config.FadeMs} 毫秒");
+        Console.WriteLine(
+            $"增强颜色：{(config.BoostColors ? $"开（{config.SaturationBoost} 倍）" : "关")}    "
+            + $"上下灯区分开取色：{(config.SplitZones ? "开" : "关")}");
         Console.WriteLine($"配置文件：{AppConfig.DefaultPath}");
         foreach (string note in notes)
         {
@@ -115,11 +127,11 @@ internal static class SyncCommand
             PrintLine(clock, current.WallpaperState);
         }
 
-        if (current.ColorChanges != previous.ColorChanges && current.TargetColor is Rgb newColor)
+        if (current.ColorChanges != previous.ColorChanges && current.Target is ZoneColors newColors)
         {
-            string message = previous.TargetColor is Rgb oldColor
-                ? $"壁纸颜色变了：{Swatch(oldColor, colorBlocks)} → {Swatch(newColor, colorBlocks)}（{config.FadeMs} 毫秒渐变）"
-                : $"开始同步颜色：{Swatch(newColor, colorBlocks)}";
+            string message = previous.Target is ZoneColors oldColors
+                ? $"壁纸颜色变了：{ZoneSwatch(oldColors, colorBlocks)} → {ZoneSwatch(newColors, colorBlocks)}（{config.FadeMs} 毫秒渐变）"
+                : $"开始同步颜色：{ZoneSwatch(newColors, colorBlocks)}";
             PrintLine(clock, message);
         }
 
@@ -143,12 +155,15 @@ internal static class SyncCommand
 
     private static void PrintStatusLine(SyncStatus status, double sendFps, (double CpuPercent, double MemoryMb) usage, Stopwatch clock, bool colorBlocks)
     {
-        string wallpaper = status.CapturedColor is Rgb captured ? Swatch(captured, colorBlocks) : "—";
-        string mic = status.TargetColor is Rgb target ? Swatch(target, colorBlocks) : "—（自带灯效）";
+        string mic = status.Target is ZoneColors target ? ZoneSwatch(target, colorBlocks) : "—（自带灯效）";
         PrintLine(clock,
-            $"壁纸 {wallpaper}  麦克风 {mic} | 截图 {status.LastCaptureMs:0.0} 毫秒 | 发送 {sendFps:0.0} 帧/秒"
+            $"麦克风 {mic} | 截图 {status.LastCaptureMs:0.0} 毫秒 | 发送 {sendFps:0.0} 帧/秒"
             + $" | CPU {usage.CpuPercent:0.0}% | 内存 {usage.MemoryMb:0} MB");
     }
+
+    /// <summary>两个灯区的颜色显示成"上 色块 十六进制  下 色块 十六进制"。</summary>
+    private static string ZoneSwatch(ZoneColors colors, bool colorBlocks) =>
+        $"上 {Swatch(colors.Upper, colorBlocks)}  下 {Swatch(colors.Lower, colorBlocks)}";
 
     /// <summary>颜色显示成"色块 + 十六进制"。窗口不支持彩色时只显示十六进制。</summary>
     private static string Swatch(Rgb color, bool colorBlocks) =>

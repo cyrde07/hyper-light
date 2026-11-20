@@ -1,8 +1,11 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
+    <!-- 窗口程序：双击时不弹黑色命令行窗口（托盘程序）；带命令运行时程序会自己连上命令行窗口 -->
+    <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
+    <!-- 托盘图标和菜单用 Windows 自带的 WinForms，同时也带上了图形库 System.Drawing -->
+    <UseWindowsForms>true</UseWindowsForms>
     <RootNamespace>HyperLight</RootNamespace>
     <AssemblyName>HyperLight</AssemblyName>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -20,8 +23,6 @@
   <ItemGroup>
     <!-- HidSharp：USB HID 设备通信库，Apache-2.0 许可 -->
     <PackageReference Include="HidSharp" Version="2.6.4" />
-    <!-- System.Drawing.Common：微软官方的 Windows 图形库（截图、存 PNG），MIT 许可 -->
-    <PackageReference Include="System.Drawing.Common" Version="8.0.33" />
   </ItemGroup>
 
 </Project>

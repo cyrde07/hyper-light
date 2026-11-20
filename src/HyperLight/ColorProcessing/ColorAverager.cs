@@ -13,14 +13,40 @@ internal static class ColorAverager
     private const int bytesPerPixel = 4;
 
     /// <summary>
-    /// 算平均色。pixels 是从上到下逐行排列的像素，每行 width × 4 字节。
+    /// 算麦克风两个灯区的颜色。
+    /// splitZones 为 true：上灯区取上半部分的平均色，下灯区取下半部分；为 false：两个灯区都用整张图的平均色。
     /// </summary>
     /// <exception cref="ArgumentException">尺寸不对，或者像素数据比尺寸要求的少（这是程序写错了，不是设备问题）。</exception>
-    public static Rgb Average(ReadOnlySpan<byte> pixels, int width, int height)
+    public static ZoneColors AverageZones(ReadOnlySpan<byte> pixels, int width, int height, bool splitZones)
+    {
+        if (!splitZones || height < 2)
+        {
+            return ZoneColors.Same(AverageRows(pixels, width, height, 0, height));
+        }
+
+        int middle = height / 2;
+        return new ZoneColors(
+            Upper: AverageRows(pixels, width, height, 0, middle),
+            Lower: AverageRows(pixels, width, height, middle, height));
+    }
+
+    /// <summary>算整张图的平均色。pixels 是从上到下逐行排列的像素，每行 width × 4 字节。</summary>
+    /// <exception cref="ArgumentException">尺寸不对，或者像素数据比尺寸要求的少。</exception>
+    public static Rgb Average(ReadOnlySpan<byte> pixels, int width, int height) =>
+        AverageRows(pixels, width, height, 0, height);
+
+    /// <summary>算第 firstRow 行（含）到第 endRow 行（不含）之间的平均色。</summary>
+    /// <exception cref="ArgumentException">尺寸或行范围不对，或者像素数据比尺寸要求的少。</exception>
+    public static Rgb AverageRows(ReadOnlySpan<byte> pixels, int width, int height, int firstRow, int endRow)
     {
         if (width <= 0 || height <= 0)
         {
             throw new ArgumentException($"图片尺寸不对：{width}x{height}");
+        }
+
+        if (firstRow < 0 || endRow > height || firstRow >= endRow)
+        {
+            throw new ArgumentException($"行范围不对：{firstRow}～{endRow}（图片高 {height}）");
         }
 
         long required = (long)width * height * bytesPerPixel;
@@ -31,7 +57,7 @@ internal static class ColorAverager
 
         long sumR = 0, sumG = 0, sumB = 0, count = 0;
         int rowBytes = width * bytesPerPixel;
-        for (int y = sampleStep / 2; y < height; y += sampleStep)
+        for (int y = firstRow + (sampleStep / 2); y < endRow; y += sampleStep)
         {
             int rowStart = y * rowBytes;
             for (int x = sampleStep / 2; x < width; x += sampleStep)
@@ -44,10 +70,10 @@ internal static class ColorAverager
             }
         }
 
-        // 图片比取样间隔还小时（几乎不会发生），直接取正中间那个像素
+        // 范围比取样间隔还小时（几乎不会发生），直接取范围正中间那个像素
         if (count == 0)
         {
-            int center = ((height / 2) * rowBytes) + ((width / 2) * bytesPerPixel);
+            int center = (((firstRow + endRow) / 2) * rowBytes) + ((width / 2) * bytesPerPixel);
             return new Rgb(pixels[center + 2], pixels[center + 1], pixels[center]);
         }
 

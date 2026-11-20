@@ -48,6 +48,13 @@ internal static class ColorCommand
             return 2;
         }
 
+        using MicOwnerLock? owner = MicOwnerLock.TryAcquire();
+        if (owner is null)
+        {
+            Console.WriteLine(MicOwnerLock.BusyMessage);
+            return 3;
+        }
+
         using var cancel = new CancellationTokenSource();
         ConsoleCancelEventHandler onCtrlC = (_, e) =>
         {

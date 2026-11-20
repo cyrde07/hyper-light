@@ -1,5 +1,4 @@
 ﻿using System.ComponentModel;
-using System.Globalization;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
@@ -8,10 +7,10 @@ namespace HyperLight.Config;
 
 /// <summary>
 /// 程序配置。所有配置项、默认值、允许范围和说明，都只在这个文件里定义（唯一真相来源）。
-/// 保存在 exe 旁边的 hyperlight.json，可以用记事本修改，改完重新启动程序生效。
+/// 保存在 exe 旁边的 hyperlight.json，可以用记事本修改；托盘菜单里的开关也会改这个文件。
 /// </summary>
 /// <remarks>
-/// 加新配置项时只改这个文件：加一个属性（写上默认值和 Description 说明），再在 <see cref="Validated"/> 里写上允许范围。
+/// 加新配置项时只改这个文件：加一个属性（写上默认值和 Description 说明），数值类的再在 <see cref="Validated"/> 里写上允许范围。
 /// 生成的 json 文件会自动带上每一项的中文说明。
 /// </remarks>
 internal sealed record AppConfig
@@ -30,6 +29,15 @@ internal sealed record AppConfig
 
     [Description("找不到壁纸多久后（毫秒）停止发送，让麦克风回到自带灯效。默认 3000。范围 0～60000")]
     public int WallpaperLostGraceMs { get; init; } = 3000;
+
+    [Description("增强颜色：提高饱和度，模仿 Wallpaper Engine 的「增强 LED 颜色」。true 打开，false 关闭。默认 true")]
+    public bool BoostColors { get; init; } = true;
+
+    [Description("增强倍数：增强颜色打开时，饱和度乘以多少。1.0 表示不变，越大颜色越鲜艳。默认 1.5。范围 1.0～3.0")]
+    public double SaturationBoost { get; init; } = 1.5;
+
+    [Description("上下灯区分开取色：true 表示上灯区取壁纸上半部分、下灯区取下半部分；false 表示两个灯区都用整张壁纸的平均色。默认 true")]
+    public bool SplitZones { get; init; } = true;
 
     /// <summary>配置文件的位置：exe 旁边的 hyperlight.json。</summary>
     public static string DefaultPath => Path.Combine(AppContext.BaseDirectory, "hyperlight.json");
@@ -51,7 +59,15 @@ internal sealed record AppConfig
         if (!File.Exists(path))
         {
             var defaults = new AppConfig();
-            TrySave(defaults, path, notes);
+            if (TrySave(defaults, path, out string? error))
+            {
+                notes.Add($"已生成默认配置文件：{path}");
+            }
+            else
+            {
+                notes.Add($"生成配置文件失败（{error}），这次使用默认设置。");
+            }
+
             return defaults;
         }
 
@@ -75,7 +91,27 @@ internal sealed record AppConfig
         return loaded.Validated(notes);
     }
 
-    /// <summary>把每一项的数值检查一遍，超出范围的改回默认值。</summary>
+    /// <summary>
+    /// 把配置写成带中文说明的 json 文件（托盘菜单改开关时用）。
+    /// 写不进去时返回 false，原因放在 error 里，不抛异常。
+    /// </summary>
+    public static bool TrySave(AppConfig config, string path, out string? error)
+    {
+        try
+        {
+            // UTF-8 带 BOM：Windows 记事本打开中文说明不会乱码
+            File.WriteAllText(path, ToCommentedJson(config), new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+            error = null;
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
+    /// <summary>把每一项的数值检查一遍，超出范围的改回默认值。开关（true / false）不需要检查。</summary>
     private AppConfig Validated(List<string> notes)
     {
         var defaults = new AppConfig();
@@ -86,33 +122,20 @@ internal sealed record AppConfig
             ChangeThreshold = InRange(nameof(ChangeThreshold), ChangeThreshold, 0, 255, defaults.ChangeThreshold, notes),
             FadeMs = InRange(nameof(FadeMs), FadeMs, 0, 5_000, defaults.FadeMs, notes),
             WallpaperLostGraceMs = InRange(nameof(WallpaperLostGraceMs), WallpaperLostGraceMs, 0, 60_000, defaults.WallpaperLostGraceMs, notes),
+            SaturationBoost = InRange(nameof(SaturationBoost), SaturationBoost, 1.0, 3.0, defaults.SaturationBoost, notes),
         };
     }
 
-    private static int InRange(string propertyName, int value, int min, int max, int fallback, List<string> notes)
+    private static T InRange<T>(string propertyName, T value, T min, T max, T fallback, List<string> notes)
+        where T : IComparable<T>
     {
-        if (value >= min && value <= max)
+        if (value.CompareTo(min) >= 0 && value.CompareTo(max) <= 0)
         {
             return value;
         }
 
         notes.Add($"配置项 {JsonName(propertyName)} = {value} 超出范围（{min}～{max}），这次使用默认值 {fallback}。");
         return fallback;
-    }
-
-    /// <summary>生成带中文说明的配置文件。写不进去只提示，不影响运行。</summary>
-    private static void TrySave(AppConfig config, string path, List<string> notes)
-    {
-        try
-        {
-            // UTF-8 带 BOM：Windows 记事本打开中文说明不会乱码
-            File.WriteAllText(path, ToCommentedJson(config), new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
-            notes.Add($"已生成默认配置文件：{path}");
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            notes.Add($"生成配置文件失败（{ex.Message}），这次使用默认设置。");
-        }
     }
 
     /// <summary>
@@ -132,7 +155,9 @@ internal sealed record AppConfig
         {
             PropertyInfo property = properties[i];
             string description = property.GetCustomAttribute<DescriptionAttribute>()?.Description ?? "";
-            string value = Convert.ToString(property.GetValue(config), CultureInfo.InvariantCulture) ?? "";
+
+            // 用 json 序列化器写数值，保证格式正确（比如 true 是小写、小数点不受系统语言影响）
+            string value = JsonSerializer.Serialize(property.GetValue(config), property.PropertyType);
             string comma = i < properties.Length - 1 ? "," : "";
             json.AppendLine($"  // {description}");
             json.AppendLine($"  \"{JsonName(property.Name)}\": {value}{comma}");
