@@ -3,6 +3,7 @@ using HyperLight.Capture;
 using HyperLight.ColorProcessing;
 using HyperLight.Config;
 using HyperLight.Device;
+using HyperLight.Diagnostics;
 
 namespace HyperLight;
 
@@ -57,6 +58,12 @@ internal sealed class SyncEngine : IDisposable
     /// <summary>多久查一次 NGENUITY。查进程列表会产生不少临时数据，没必要太频繁。</summary>
     private static readonly TimeSpan ngenuityCheckInterval = TimeSpan.FromSeconds(10);
 
+    /// <summary>截图或发送耽误超过这个时间，就记进卡顿记录。</summary>
+    private static readonly TimeSpan stallThreshold = TimeSpan.FromMilliseconds(300);
+
+    /// <summary>颜色变化超过这个值（0～255），就当作"突变"记下来（多半是换了壁纸）。</summary>
+    private const int bigColorJump = 60;
+
     /// <summary>停止时最多等两个线程收尾多久。</summary>
     private static readonly TimeSpan stopTimeout = TimeSpan.FromSeconds(5);
 
@@ -72,6 +79,11 @@ internal sealed class SyncEngine : IDisposable
     private Thread? sendThread;
     private volatile bool paused;
     private bool disposed;
+
+    // 以下只给卡顿记录用：记住上次记下的状态，同样的情况不重复写
+    private IntPtr loggedWallpaperWindow;   // 只在截图线程里用
+    private bool loggedWallpaperMissing;    // 只在截图线程里用
+    private bool micConnectedBefore;        // 只在发送线程里用
 
     public SyncEngine(AppConfig config)
     {
@@ -116,6 +128,7 @@ internal sealed class SyncEngine : IDisposable
         }
 
         clock.Start();
+        StallLog.Write("启动", $"开始同步（截图间隔 {config.CaptureIntervalMs} 毫秒，取色方式 {ZoneLayoutText.Of(config.ZoneLayout)}）");
         captureThread = StartBackgroundThread(CaptureLoop, "HyperLight 截图线程");
         sendThread = StartBackgroundThread(SendLoop, "HyperLight 发送线程");
     }
@@ -173,7 +186,13 @@ internal sealed class SyncEngine : IDisposable
                         UpdateStatus(s => s with { NgenuityRunning = running });
                     }
 
+                    TimeSpan captureRoundStart = clock.Elapsed;
                     target = CaptureOnce(capturer, target, ref lastSuccess, lostGrace);
+                    TimeSpan took = clock.Elapsed - captureRoundStart;
+                    if (took > stallThreshold)
+                    {
+                        StallLog.Write("截图", $"这次截图很慢：{took.TotalMilliseconds:0} 毫秒");
+                    }
                 }
             }
             catch (Exception ex)
@@ -194,6 +213,7 @@ internal sealed class SyncEngine : IDisposable
         if (target is not WallpaperTarget known || !WallpaperWindowFinder.IsStillValid(known))
         {
             target = WallpaperWindowFinder.Find();
+            LogWallpaperWindow(target);
         }
 
         TimeSpan captureStart = clock.Elapsed;
@@ -202,6 +222,12 @@ internal sealed class SyncEngine : IDisposable
         {
             if (target is not WallpaperTarget found || !capturer.TryCapture(found))
             {
+                if (target is not null && !loggedWallpaperMissing)
+                {
+                    StallLog.Write("壁纸", "找到了壁纸窗口，但截图失败");
+                    loggedWallpaperMissing = true;
+                }
+
                 HandleWallpaperMissing(lastSuccess, lostGrace);
                 return null;
             }
@@ -216,8 +242,13 @@ internal sealed class SyncEngine : IDisposable
         }
 
         TimeSpan now = clock.Elapsed;
+        ZoneColors? before = CurrentTarget();
         bool upperChanged = upperFilter.Offer(colors.Upper, now);
         bool lowerChanged = lowerFilter.Offer(colors.Lower, now);
+        if (before is ZoneColors old && ZoneDifference(old, colors) >= bigColorJump)
+        {
+            StallLog.Write("颜色", $"颜色突变：{old} → {colors}（多半是换了壁纸，或者壁纸在重新加载）");
+        }
         double captureMs = (clock.Elapsed - captureStart).TotalMilliseconds;
         lastSuccess = now;
 
@@ -233,6 +264,37 @@ internal sealed class SyncEngine : IDisposable
         });
         return target;
     }
+
+    /// <summary>
+    /// 卡顿记录：壁纸窗口找不到了，或者换成了另一个窗口（Wallpaper Engine 换壁纸、重新加载时会这样）。
+    /// 同样的情况只记一次。
+    /// </summary>
+    private void LogWallpaperWindow(WallpaperTarget? target)
+    {
+        if (target is not WallpaperTarget found)
+        {
+            if (!loggedWallpaperMissing)
+            {
+                StallLog.Write("壁纸", "找不到壁纸窗口（Wallpaper Engine 没开、正在换壁纸或正在重新加载）");
+                loggedWallpaperMissing = true;
+            }
+
+            return;
+        }
+
+        if (found.WallpaperWindow != loggedWallpaperWindow || loggedWallpaperMissing)
+        {
+            StallLog.Write("壁纸", loggedWallpaperWindow == IntPtr.Zero
+                ? $"找到壁纸窗口 0x{found.WallpaperWindow.ToInt64():X}"
+                : $"壁纸窗口变了：0x{loggedWallpaperWindow.ToInt64():X} → 0x{found.WallpaperWindow.ToInt64():X}（Wallpaper Engine 可能换了壁纸或重新加载）");
+            loggedWallpaperWindow = found.WallpaperWindow;
+            loggedWallpaperMissing = false;
+        }
+    }
+
+    /// <summary>两组灯区颜色的差别：上、下灯区里差得多的那个。</summary>
+    private static int ZoneDifference(ZoneColors a, ZoneColors b) =>
+        Math.Max(ColorChangeFilter.Difference(a.Upper, b.Upper), ColorChangeFilter.Difference(a.Lower, b.Lower));
 
     /// <summary>增强颜色打开时，两个灯区都提高饱和度。</summary>
     private ZoneColors Enhance(ZoneColors colors) =>
@@ -269,9 +331,21 @@ internal sealed class SyncEngine : IDisposable
         int intervalMs = config.SendIntervalMs;
         using var mic = new QuadcastMic();
         long nextFrameMs = clock.ElapsedMilliseconds;
+        TimeSpan allowedGap = TimeSpan.FromMilliseconds(intervalMs) + stallThreshold;
+        TimeSpan lastRound = clock.Elapsed;
 
         while (!stopping.IsCancellationRequested)
         {
+            // 卡顿记录：两帧之间隔得太久，说明发送线程被卡住了（整台电脑卡，或者 USB 卡住）
+            TimeSpan roundStart = clock.Elapsed;
+            TimeSpan gap = roundStart - lastRound;
+            if (gap > allowedGap)
+            {
+                StallLog.Write("发送", $"发送中断了 {gap.TotalMilliseconds:0} 毫秒（这段时间麦克风会回到自带灯效）");
+            }
+
+            lastRound = roundStart;
+
             try
             {
                 SendOnce(mic);
@@ -319,6 +393,20 @@ internal sealed class SyncEngine : IDisposable
             _ => $"麦克风断开：{mic.LastError}（会自动重连）",
         };
         bool connected = result == SendResult.Sent;
+        if (result == SendResult.Failed)
+        {
+            StallLog.Write("麦克风", $"麦克风断开：{mic.LastError}");
+        }
+        else if (connected && !micConnectedBefore)
+        {
+            StallLog.Write("麦克风", "麦克风已连上");
+        }
+
+        if (result != SendResult.NotConnected)
+        {
+            micConnectedBefore = connected;
+        }
+
         UpdateStatus(s => s with { MicState = micState, MicConnected = connected, FramesSent = s.FramesSent + (connected ? 1 : 0) });
     }
 

@@ -111,6 +111,20 @@ HyperLight.exe sync
 `manual-tests/m2-probe/probe-wallpaper.bat`（对应 `HyperLight.exe probe`）：找到 Wallpaper Engine 画壁纸的窗口，用几种方法各截两次，
 截图和报告存到 exe 旁边的 `probe-日期-时间` 文件夹。只读，不碰 Wallpaper Engine 的文件、进程和设置。
 
+## 卡顿记录（排查"灯暗一下、屏幕卡一下"）
+
+程序会在出现异常时自动记一行到 exe 旁边的 `hyperlight-log.txt`（平时什么都不写，超过 1 MB 会自动换新文件）：
+
+| 记录 | 说明 |
+|---|---|
+| `[截图] 这次截图很慢` | 截一次壁纸超过 0.3 秒。如果卡顿时出现，多半是截图引起的 |
+| `[发送] 发送中断了 N 毫秒` | 发送线程被卡住了（整台电脑卡，或者 USB 卡住），这段时间麦克风会回到自带灯效 |
+| `[壁纸] 壁纸窗口变了 / 找不到壁纸窗口` | Wallpaper Engine 换壁纸、重新加载或者没开 |
+| `[颜色] 颜色突变` | 颜色一下子变了很多，多半是换了壁纸 |
+| `[麦克风] 麦克风断开 / 已连上` | USB 断开又连上 |
+
+出现卡顿后，看最后几条记录的时间和内容，就能判断那一刻发生了什么；再拿这个时间去 Windows 事件查看器里对照。
+
 ## 换电脑 / 重新安装
 
 需要：Windows 10 / 11（64 位）、HyperX QuadCast S、Wallpaper Engine。不用装 .NET，也不用装 iCUE 等其他软件。
@@ -138,6 +152,8 @@ hyper-light/
    ├─ Program.cs        入口：不带参数启动托盘；带命令时是诊断工具
    ├─ SyncEngine.cs     同步引擎：截图线程 + 发送线程（托盘和 sync 命令共用）
    ├─ MicOwnerLock.cs   防止多个 HyperLight 同时控制麦克风
+   ├─ Diagnostics/
+   │  └─ StallLog.cs           卡顿记录（hyperlight-log.txt）
    ├─ Rgb.cs            颜色类型（各模块共用）
    ├─ Tray/             托盘程序（M4）
    │  ├─ TrayApp.cs            托盘图标、右键菜单、暂停 / 退出
