@@ -89,8 +89,8 @@ internal sealed class SyncEngine : IDisposable
     {
         this.config = config;
         var fade = TimeSpan.FromMilliseconds(config.FadeMs);
-        upperFilter = new ColorChangeFilter(config.ChangeThreshold, fade);
-        lowerFilter = new ColorChangeFilter(config.ChangeThreshold, fade);
+        upperFilter = new ColorChangeFilter(config.ChangeThreshold, fade, config.ConfirmCaptures);
+        lowerFilter = new ColorChangeFilter(config.ChangeThreshold, fade, config.ConfirmCaptures);
     }
 
     /// <summary>当前状态快照。任何线程都可以读。</summary>
@@ -247,7 +247,9 @@ internal sealed class SyncEngine : IDisposable
         bool lowerChanged = lowerFilter.Offer(colors.Lower, now);
         if (before is ZoneColors old && ZoneDifference(old, colors) >= bigColorJump)
         {
-            StallLog.Write("颜色", $"颜色突变：{old} → {colors}（多半是换了壁纸，或者壁纸在重新加载）");
+            StallLog.Write("颜色", upperChanged || lowerChanged
+                ? $"颜色突变：{old} → {colors}（已切换；多半是换了壁纸）"
+                : $"颜色突变：{old} → {colors}（先不切换，等下次截图确认；一闪而过的过渡画面会被忽略）");
         }
         double captureMs = (clock.Elapsed - captureStart).TotalMilliseconds;
         lastSuccess = now;
@@ -333,6 +335,7 @@ internal sealed class SyncEngine : IDisposable
         long nextFrameMs = clock.ElapsedMilliseconds;
         TimeSpan allowedGap = TimeSpan.FromMilliseconds(intervalMs) + stallThreshold;
         TimeSpan lastRound = clock.Elapsed;
+        TimeSpan lastSendTook = TimeSpan.Zero;
 
         while (!stopping.IsCancellationRequested)
         {
@@ -341,10 +344,17 @@ internal sealed class SyncEngine : IDisposable
             TimeSpan gap = roundStart - lastRound;
             if (gap > allowedGap)
             {
-                StallLog.Write("发送", $"发送中断了 {gap.TotalMilliseconds:0} 毫秒（这段时间麦克风会回到自带灯效）");
+                // 分清楚是卡在给麦克风发数据上（USB 慢），还是整个程序被卡住（电脑整体卡了一下）
+                string where = lastSendTook.TotalMilliseconds >= gap.TotalMilliseconds * 0.7
+                    ? "主要卡在给麦克风发数据上（USB 那边慢）"
+                    : "发数据本身不慢，是整个程序被卡住了（多半是电脑整体卡了一下）";
+                StallLog.Write(
+                    "发送",
+                    $"发送中断了 {gap.TotalMilliseconds:0} 毫秒，其中给麦克风发数据花了 {lastSendTook.TotalMilliseconds:0} 毫秒：{where}。这段时间麦克风会回到自带灯效");
             }
 
             lastRound = roundStart;
+            TimeSpan sendStart = clock.Elapsed;
 
             try
             {
@@ -356,6 +366,7 @@ internal sealed class SyncEngine : IDisposable
                 UpdateStatus(s => s with { LastError = $"发送出错：{ex.GetType().Name}：{ex.Message}" });
             }
 
+            lastSendTook = clock.Elapsed - sendStart;
             nextFrameMs += intervalMs;
             long waitMs = nextFrameMs - clock.ElapsedMilliseconds;
             if (waitMs > 0)

@@ -29,6 +29,9 @@ internal sealed record AppConfig
     [Description("渐变时间（毫秒）：颜色变了以后，花多久过渡到新颜色。0 表示立刻切换。默认 400。范围 0～5000")]
     public int FadeMs { get; init; } = 400;
 
+    [Description("确认次数：颜色变化够大时，新颜色要连续截到几次才切换。默认 2（截图间隔 500 毫秒时约 1 秒），换壁纸时一闪而过的过渡画面就不会传到麦克风。1 表示截到就换。范围 1～5")]
+    public int ConfirmCaptures { get; init; } = 2;
+
     [Description("找不到壁纸多久后（毫秒）停止发送，让麦克风回到自带灯效。默认 3000。范围 0～60000")]
     public int WallpaperLostGraceMs { get; init; } = 3000;
 
@@ -129,6 +132,7 @@ internal sealed record AppConfig
             SendIntervalMs = InRange(nameof(SendIntervalMs), SendIntervalMs, 20, 100, defaults.SendIntervalMs, notes),
             ChangeThreshold = InRange(nameof(ChangeThreshold), ChangeThreshold, 0, 255, defaults.ChangeThreshold, notes),
             FadeMs = InRange(nameof(FadeMs), FadeMs, 0, 5_000, defaults.FadeMs, notes),
+            ConfirmCaptures = InRange(nameof(ConfirmCaptures), ConfirmCaptures, 1, 5, defaults.ConfirmCaptures, notes),
             WallpaperLostGraceMs = InRange(nameof(WallpaperLostGraceMs), WallpaperLostGraceMs, 0, 60_000, defaults.WallpaperLostGraceMs, notes),
             SaturationBoost = InRange(nameof(SaturationBoost), SaturationBoost, 1.0, 3.0, defaults.SaturationBoost, notes),
         };
