@@ -10,8 +10,9 @@
 /// 和麦克风不同，这块芯片的报告编号不是 0，所以包的长度就是 64，不用再加 1。
 /// 灯光控制节点的标识：Usage Page 0xFF89，Usage 0xCC。
 /// 主板上两个可控的 ARGB 接口，在协议里各有一个通道：
-///   通道 0x58：主板上印 ARGB_V2_1（OpenRGB 里叫 ARGB_V2_3）—— Luca 的机箱集线板接在这里
-///   通道 0x59：主板上印 ARGB_V2_2 —— Luca 的冷排接在这里
+///   通道 0x58：主板上印 ARGB_V2_2 —— Luca 的冷排接在这里
+///   通道 0x59：主板上印 ARGB_V2_1 —— Luca 的机箱集线板接在这里
+/// 这个对应关系是 M5-1 实测出来的（test5：机箱红、冷排蓝）。按 OpenRGB 资料推测的方向正好相反，以实测为准。
 /// 发颜色的步骤：先发"关掉自带灯效"（0x32），再按通道发颜色包（每包最多 19 颗灯）。
 /// 不使用任何"保存到芯片"的指令（比如 0x5E、0x33），所以断电重启后主板会恢复原样。
 /// </remarks>
@@ -76,18 +77,18 @@ internal static class MotherboardLightProtocol
     /// <summary>每个灯区在协议里的通道编号。灯区和接口的对应关系全项目只写在这里。</summary>
     public static byte ChannelOf(MotherboardLightZone zone) => zone switch
     {
-        MotherboardLightZone.Case => 0x58,
-        MotherboardLightZone.Radiator => 0x59,
+        MotherboardLightZone.Case => 0x59,
+        MotherboardLightZone.Radiator => 0x58,
         _ => throw new ArgumentOutOfRangeException(nameof(zone), zone, "未知的灯区"),
     };
 
-    /// <summary>"关掉自带灯效"时，每个灯区对应的那一位。</summary>
-    private static byte BuiltinEffectBitOf(MotherboardLightZone zone) => zone switch
-    {
-        MotherboardLightZone.Case => 0x01,
-        MotherboardLightZone.Radiator => 0x02,
-        _ => throw new ArgumentOutOfRangeException(nameof(zone), zone, "未知的灯区"),
-    };
+    /// <summary>"关掉自带灯效"时，每个灯区对应的那一位：通道 0x58 是 0x01，通道 0x59 是 0x02。</summary>
+    private static byte BuiltinEffectBitOf(MotherboardLightZone zone) =>
+        ChannelOf(zone) == 0x58 ? (byte)0x01 : (byte)0x02;
+
+    /// <summary>从芯片信息里取出某个灯区的颜色顺序设置：通道 0x58 用第 1 个设置，通道 0x59 用第 2 个。</summary>
+    public static uint ColorOrderOf(MotherboardLightInfo info, MotherboardLightZone zone) =>
+        ChannelOf(zone) == 0x58 ? info.StripCalibration0 : info.StripCalibration1;
 
     /// <summary>生成"关掉所有灯区的自带灯效"的请求包。关掉后，芯片才会显示我们发的颜色。</summary>
     public static byte[] BuildDisableBuiltinEffectsRequest()
@@ -264,10 +265,10 @@ internal static class MotherboardLightProtocol
 /// <summary>主板上可以分开控制的灯区。</summary>
 internal enum MotherboardLightZone
 {
-    /// <summary>机箱灯：接在主板 ARGB_V2_1 上的机箱集线板（5 个风扇和灯条）。</summary>
+    /// <summary>机箱灯：接在主板 ARGB_V2_1 上的机箱集线板（5 个风扇和灯条）。协议通道 0x59。</summary>
     Case,
 
-    /// <summary>冷排灯：接在主板 ARGB_V2_2 上的水冷。</summary>
+    /// <summary>冷排灯：接在主板 ARGB_V2_2 上的水冷。协议通道 0x58。</summary>
     Radiator,
 }
 

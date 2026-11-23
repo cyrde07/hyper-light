@@ -49,7 +49,7 @@ internal sealed class MotherboardLight : IDisposable
             return SendResult.NotConnected;
         }
 
-        uint colorOrder = zone == MotherboardLightZone.Case ? Info.StripCalibration0 : Info.StripCalibration1;
+        uint colorOrder = MotherboardLightProtocol.ColorOrderOf(Info, zone);
         List<byte[]> reports = MotherboardLightProtocol.BuildColorReports(zone, leds, colorOrder);
         return Send(current, reports);
     }

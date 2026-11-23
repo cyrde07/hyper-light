@@ -135,8 +135,8 @@ internal static class MotherboardLightDiagnostics
         report.AppendLine($"    芯片编号：0x{info.ChipId:X8}");
         report.AppendLine($"    产品代码 0x{info.Product:X2}，设备序号 {info.DeviceNumber}，灯带检测 0x{info.StripDetect:X2}，功能标志 0x{info.SupportFlags:X2}");
         report.AppendLine($"    灯数字节：{Convert.ToHexString(info.LedCountCodes)}");
-        report.AppendLine($"    通道 0x58（主板印 ARGB_V2_1，接机箱集线板）：灯数上限 {LedLimitText(info.LedCountCodes[0] & 0x0F)}，颜色顺序 {ColorOrderText(info.StripCalibration0)}");
-        report.AppendLine($"    通道 0x59（主板印 ARGB_V2_2，接冷排）：      灯数上限 {LedLimitText(info.LedCountCodes[0] >> 4)}，颜色顺序 {ColorOrderText(info.StripCalibration1)}");
+        report.AppendLine($"    通道 0x58（主板印 ARGB_V2_2，接冷排）：      灯数上限 {LedLimitText(info.LedCountCodes[0] & 0x0F)}，颜色顺序 {ColorOrderText(info.StripCalibration0)}");
+        report.AppendLine($"    通道 0x59（主板印 ARGB_V2_1，接机箱集线板）：灯数上限 {LedLimitText(info.LedCountCodes[0] >> 4)}，颜色顺序 {ColorOrderText(info.StripCalibration1)}");
     }
 
     // ───────────────────────── 小工具 ─────────────────────────
