@@ -664,7 +664,14 @@ internal sealed class SyncEngine : IDisposable
     private SendResult SendOnboardIfChanged(MotherboardLight board, TimeSpan now, BoardSentColors lastSent)
     {
         Rgb? wanted = FreeMode ? config.FreeOnboardColor : CurrentOf(config.OnboardColorSource, now);
-        if (!config.OnboardEnabled || wanted is not Rgb color || lastSent.Onboard == color)
+        if (!config.OnboardEnabled || wanted is not Rgb original)
+        {
+            return SendResult.Sent;
+        }
+
+        // 主板灯灯珠少，淡颜色看起来发白：发之前加强颜色（只给主板灯）
+        Rgb color = ColorEnhancer.StrengthenForLed(original, config.OnboardColorBoost);
+        if (lastSent.Onboard == color)
         {
             return SendResult.Sent;
         }
@@ -758,12 +765,12 @@ internal sealed class SyncEngine : IDisposable
         return $"模式 {ColorModeRules.TextOf(config.ColorMode)}，麦克风 {OnOff(config.MicEnabled)}，"
             + $"机箱灯 {DescribeBoardZone(config.CaseEnabled, config.CaseColorSource, config.CaseEffect)}，"
             + $"冷排灯 {DescribeBoardZone(config.RadiatorEnabled, config.RadiatorColorSource, config.RadiatorEffect)}，"
-            + $"主板灯 {DescribeOnboard(config.OnboardEnabled, config.OnboardColorSource)}";
+            + $"主板灯 {DescribeOnboard(config.OnboardEnabled, config.OnboardColorSource, config.OnboardColorBoost)}";
     }
 
-    /// <summary>主板灯的设置说明，比如"开（整张）"或"关"。日志、命令行显示共用。</summary>
-    public static string DescribeOnboard(bool enabled, ColorSource source) =>
-        enabled ? $"开（{ColorSourceRules.TextOf(source)}）" : "关";
+    /// <summary>主板灯的设置说明，比如"开（整张，颜色加强 60）"或"关"。日志、命令行显示共用。</summary>
+    public static string DescribeOnboard(bool enabled, ColorSource source, int colorBoost) =>
+        enabled ? $"开（{ColorSourceRules.TextOf(source)}，颜色加强 {(colorBoost == 0 ? "关" : colorBoost.ToString())}）" : "关";
 
     /// <summary>
     /// 一个主板灯区的设置说明，比如"开（单色，下半区）""开（左右流动）""关"。日志、命令行显示共用。

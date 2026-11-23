@@ -22,8 +22,6 @@ internal sealed class TrayApp : ApplicationContext
 {
     private const int refreshIntervalMs = 500;
 
-    /// <summary>拖动"加大差异"滑动条停下多久后才生效（拖动过程中不反复重启同步）。</summary>
-    private const int spreadApplyDelayMs = 400;
     private const int balloonTimeoutMs = 5000;
 
     /// <summary>托盘图标的提示文字最多 127 个字符（Windows 的限制）。</summary>
@@ -58,9 +56,8 @@ internal sealed class TrayApp : ApplicationContext
     private readonly ToolStripMenuItem onboardItem;
     private readonly ToolStripMenuItem onboardSourceMenu;
     private readonly Dictionary<ColorSource, ToolStripMenuItem> onboardSourceItems = new();
-    private readonly ToolStripMenuItem spreadLabel;
-    private readonly TrackBar spreadSlider;
-    private readonly System.Windows.Forms.Timer spreadApplyTimer;
+    private readonly MenuSlider spreadSlider;
+    private readonly MenuSlider onboardBoostSlider;
     private readonly ToolStripMenuItem autoStartItem;
     private readonly System.Windows.Forms.Timer refreshTimer;
 
@@ -74,8 +71,6 @@ internal sealed class TrayApp : ApplicationContext
     /// <summary>点了以后要关闭菜单的项（打开设置文件、重新读取设置、退出、各个选色项）。其他项点了都不关。</summary>
     private readonly HashSet<ToolStripItem> closingItems = new();
 
-    /// <summary>程序自己在设置滑动条的位置（不是用户拖的），这时不要当成修改。</summary>
-    private bool updatingSlider;
     private bool exiting;
     private bool disposed;
 
@@ -176,22 +171,28 @@ internal sealed class TrayApp : ApplicationContext
         onboardSourceMenu = BuildChoiceMenu(
             "主板灯取色", ColorSourceRules.All, ColorSourceRules.TextOf, onboardSourceItems,
             source => config.OnboardColorSource != source, source => config with { OnboardColorSource = source });
-        spreadLabel = new ToolStripMenuItem("加大差异") { Enabled = false };
-        spreadSlider = new TrackBar
-        {
-            Minimum = 0,
-            Maximum = 100,
-            TickFrequency = 10,
-            SmallChange = 5,
-            LargeChange = 10,
-            AutoSize = false,
-            Width = 220,
-            Height = 32,
-        };
-        spreadSlider.ValueChanged += (_, _) => OnSpreadSliderChanged();
-        var spreadSliderHost = new ToolStripControlHost(spreadSlider) { AutoSize = false, Width = 230, Height = 34 };
-        spreadApplyTimer = new System.Windows.Forms.Timer { Interval = spreadApplyDelayMs };
-        spreadApplyTimer.Tick += (_, _) => ApplySpreadFromSlider();
+        spreadSlider = new MenuSlider(
+            spread => spread == 0
+                ? "加大差异：关闭（往右拖打开，双色、流动时用）"
+                : $"加大差异：{spread}（拖到最左边关闭，双色、流动时用）",
+            spread =>
+            {
+                if (spread != config.TwoColorSpread)
+                {
+                    ApplyConfig(config with { TwoColorSpread = spread });
+                }
+            });
+        onboardBoostSlider = new MenuSlider(
+            boost => boost == 0
+                ? "主板灯颜色加强：关闭（往右拖打开，淡颜色不再发白）"
+                : $"主板灯颜色加强：{boost}（拖到最左边关闭）",
+            boost =>
+            {
+                if (boost != config.OnboardColorBoost)
+                {
+                    ApplyConfig(config with { OnboardColorBoost = boost });
+                }
+            });
         autoStartItem = new ToolStripMenuItem("开机自启", null, KeepOpen(ToggleAutoStart));
 
         menu = new ContextMenuStrip();
@@ -213,10 +214,12 @@ internal sealed class TrayApp : ApplicationContext
             radiatorItem,
             radiatorSourceMenu,
             radiatorEffectMenu,
-            spreadLabel,
-            spreadSliderHost,
+            spreadSlider.Label,
+            spreadSlider.Host,
             onboardItem,
             onboardSourceMenu,
+            onboardBoostSlider.Label,
+            onboardBoostSlider.Host,
             new ToolStripSeparator(),
             autoStartItem,
             ClosingItem("打开设置文件", OpenConfigFile),
@@ -349,10 +352,8 @@ internal sealed class TrayApp : ApplicationContext
         CheckOnly(caseEffectItems, config.CaseEffect);
         CheckOnly(radiatorEffectItems, config.RadiatorEffect);
 
-        updatingSlider = true;
-        spreadSlider.Value = config.TwoColorSpread;
-        updatingSlider = false;
-        spreadLabel.Text = SpreadText(config.TwoColorSpread);
+        spreadSlider.Show(config.TwoColorSpread);
+        onboardBoostSlider.Show(config.OnboardColorBoost);
 
         // 双色、流动灯效用的是固定的两块区域，取色只在单色时有用：不用时变灰，免得以为点了没反应
         // 自由选色时不截图，和壁纸有关的选项（增强颜色、取色方式、取色、加大差异）都用不到，一起变灰
@@ -461,7 +462,7 @@ internal sealed class TrayApp : ApplicationContext
     }
 
     /// <summary>
-    /// 弹出 Windows 的选色窗口，从 <paramref name="current"/> 开始选。点了确定就保存新颜色并马上生效；点取消什么都不改。
+    /// 弹出 Windows 的选色窗口，从 <paramref name="current"/> 开始选。点了确定就保存新颜色、切到自由选色模式并马上生效；点取消什么都不改。
     /// </summary>
     private void PickColor(Rgb current, Func<Rgb, AppConfig> withColor)
     {
@@ -474,8 +475,9 @@ internal sealed class TrayApp : ApplicationContext
 
         if (dialog.ShowDialog() == DialogResult.OK)
         {
+            // 选了颜色就切到自由选色模式，马上能看到效果（不然停在"跟壁纸"时，选的颜色不会被使用）
             Color picked = dialog.Color;
-            ApplyConfig(withColor(new Rgb(picked.R, picked.G, picked.B)));
+            ApplyConfig(withColor(new Rgb(picked.R, picked.G, picked.B)) with { ColorMode = ColorMode.Free });
         }
     }
 
@@ -494,34 +496,6 @@ internal sealed class TrayApp : ApplicationContext
         item.Image = swatch;
         old?.Dispose();
     }
-
-    /// <summary>拖动滑动条时：马上更新文字，停下一会儿再生效（拖动过程中不反复重启同步）。</summary>
-    private void OnSpreadSliderChanged()
-    {
-        if (updatingSlider)
-        {
-            return;
-        }
-
-        spreadLabel.Text = SpreadText(spreadSlider.Value);
-        spreadApplyTimer.Stop();
-        spreadApplyTimer.Start();
-    }
-
-    private void ApplySpreadFromSlider()
-    {
-        spreadApplyTimer.Stop();
-        if (spreadSlider.Value != config.TwoColorSpread)
-        {
-            ApplyConfig(config with { TwoColorSpread = spreadSlider.Value });
-        }
-    }
-
-    /// <summary>滑动条上面那行说明文字。</summary>
-    private static string SpreadText(int spread) =>
-        spread == 0
-            ? "加大差异：关闭（往右拖打开，双色、流动时用）"
-            : $"加大差异：{spread}（拖到最左边关闭，双色、流动时用）";
 
     /// <summary>"多选一"菜单里只勾选当前的那一项。</summary>
     private static void CheckOnly<T>(Dictionary<T, ToolStripMenuItem> items, T current)
@@ -644,7 +618,8 @@ internal sealed class TrayApp : ApplicationContext
         {
             exiting = true;
             refreshTimer.Stop();
-            spreadApplyTimer.Stop();
+            spreadSlider.Stop();
+            onboardBoostSlider.Stop();
             engine.Dispose();
             notifyIcon.Visible = false;
         }
@@ -658,7 +633,8 @@ internal sealed class TrayApp : ApplicationContext
         {
             disposed = true;
             refreshTimer.Dispose();
-            spreadApplyTimer.Dispose();
+            spreadSlider.Dispose();
+            onboardBoostSlider.Dispose();
             engine.Dispose();
             notifyIcon.Dispose();
             foreach (ToolStripMenuItem item in new[]

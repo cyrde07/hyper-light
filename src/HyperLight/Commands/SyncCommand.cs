@@ -115,7 +115,7 @@ internal static class SyncCommand
             + $"机箱灯：{SyncEngine.DescribeBoardZone(config.CaseEnabled, config.CaseColorSource, config.CaseEffect)}    "
             + $"冷排灯：{SyncEngine.DescribeBoardZone(config.RadiatorEnabled, config.RadiatorColorSource, config.RadiatorEffect)}    "
             + $"加大差异：{(config.TwoColorSpread == 0 ? "关" : config.TwoColorSpread.ToString())}    "
-            + $"主板灯：{SyncEngine.DescribeOnboard(config.OnboardEnabled, config.OnboardColorSource)}");
+            + $"主板灯：{SyncEngine.DescribeOnboard(config.OnboardEnabled, config.OnboardColorSource, config.OnboardColorBoost)}");
         Console.WriteLine($"配置文件：{AppConfig.DefaultPath}");
         foreach (string note in notes)
         {

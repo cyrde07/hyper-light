@@ -63,6 +63,9 @@ internal sealed record AppConfig
     [Description("主板灯取色：upper 上半区；lower 下半区；left 左半区；right 右半区；average 整张。默认 average")]
     public ColorSource OnboardColorSource { get; init; } = ColorSource.Average;
 
+    [Description("主板灯颜色加强（0～100）：主板灯灯珠少，淡颜色看起来发白；加强后亮度不变、颜色更浓（灰色、白色没有颜色可加强）。0 表示关闭。跟壁纸、自由选色都有效。托盘菜单里可以用滑动条调。默认 60")]
+    public int OnboardColorBoost { get; init; } = 60;
+
     [Description("机箱灯取色（灯效是单色时用）：upper 上半区；lower 下半区；left 左半区；right 右半区；average 整张。默认 lower")]
     public ColorSource CaseColorSource { get; init; } = ColorSource.Lower;
 
@@ -207,6 +210,7 @@ internal sealed record AppConfig
             FlowCycleMs = InRange(nameof(FlowCycleMs), FlowCycleMs, 500, 20_000, defaults.FlowCycleMs, notes),
             FlowPeriodLeds = InRange(nameof(FlowPeriodLeds), FlowPeriodLeds, 2, 64, defaults.FlowPeriodLeds, notes),
             TwoColorSpread = InRange(nameof(TwoColorSpread), TwoColorSpread, 0, 100, defaults.TwoColorSpread, notes),
+            OnboardColorBoost = InRange(nameof(OnboardColorBoost), OnboardColorBoost, 0, 100, defaults.OnboardColorBoost, notes),
         };
     }
 

@@ -6,6 +6,7 @@
 ///   Wallpaper Engine 的官方文档说明，这个选项的作用就是提高饱和度。
 ///   平均色通常偏灰（各种颜色混在一起），提高饱和度后更接近键盘上看到的颜色。
 ///   加大差异（<see cref="Separate"/>）：双色、流动灯效里两个颜色太像时，把它们拉开一点，让图案看得出来。
+///   LED 颜色加强（<see cref="StrengthenForLed"/>）：让淡颜色在 LED 上不发白（给主板灯用）。
 /// </summary>
 internal static class ColorEnhancer
 {
@@ -105,6 +106,36 @@ internal static class ColorEnhancer
         }
 
         return (first, second);
+    }
+
+    /// <summary>
+    /// LED 颜色加强：淡颜色在 LED 上看起来会发白（LED 的中等亮度看起来比屏幕亮得多），
+    /// 这里把颜色按伽马曲线压一下（较暗的分量压得更多），再把最亮的分量恢复成原来的亮度。
+    /// 结果是亮度不变、颜色更浓：浅粉 F99396 会变成 F94E52（强度 60 时）。
+    /// 灰色（红绿蓝相等）没有颜色可以加强，保持不变。
+    /// </summary>
+    /// <param name="color">原来的颜色。</param>
+    /// <param name="strength">强度 0～100。0 表示不处理；伽马值从 1（不变）到 3（强度 100）。</param>
+    public static Rgb StrengthenForLed(Rgb color, int strength)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(strength);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(strength, 100);
+
+        int max = Brightness(color);
+        if (strength == 0 || max == 0)
+        {
+            return color;
+        }
+
+        double gamma = 1 + (strength / 50.0);
+        double Curve(byte channel) => Math.Pow(channel / 255.0, gamma);
+        double r = Curve(color.R);
+        double g = Curve(color.G);
+        double b = Curve(color.B);
+
+        // 把最亮的分量恢复成原来的亮度：只改颜色浓淡，不让灯变暗
+        double scale = (max / 255.0) / Math.Max(r, Math.Max(g, b));
+        return new Rgb(ToByte(r * scale), ToByte(g * scale), ToByte(b * scale));
     }
 
     private static byte Stretch(byte channel, int max, double factor) =>
