@@ -12,6 +12,7 @@ namespace HyperLight.Commands;
 ///   board count                  把灯分段上色，用来数灯珠（M5-1）
 ///   board range 起 止             冷排只点亮第"起"到第"止"颗灯（白色），用来找灯珠一共有多少颗
 ///   board flow 颜色1 颜色2         机箱灯和冷排灯用两个颜色流动 10 秒（和托盘程序同一套流动算法）
+///   board onboard 颜色 [下方颜色]   主板自己的灯（I/O 挡板上、下）设成固定颜色
 /// color 和 count 发一次就停，然后等用户按回车：用来观察程序停发后，灯能不能保持颜色。
 /// </summary>
 internal static class BoardCommand
@@ -28,6 +29,8 @@ internal static class BoardCommand
         "         冷排只点亮这一段灯（白色），其他全黑；机箱灯不变。例子：board range 1 64",
         "  board flow <颜色1> <颜色2>",
         "         机箱灯和冷排灯用两个颜色流动 10 秒，测试流动灯效。例子：board flow FF0000 0000FF",
+        "  board onboard <颜色> [下方颜色]",
+        "         主板自己的灯设成固定颜色。只写一个颜色时上下相同；写两个时第一个给 I/O 挡板上方、第二个给下方",
         "         --apply  发完颜色后再发一个\"生效\"指令（测试需不需要它）",
     };
 
@@ -66,6 +69,7 @@ internal static class BoardCommand
             "count" when values.Length == 0 => RunCount(apply),
             "range" => RunRange(values),
             "flow" => RunFlow(values),
+            "onboard" => RunOnboard(values),
             _ => PrintUsage($"看不懂的参数：{string.Join(" ", args)}"),
         };
     }
@@ -128,6 +132,32 @@ internal static class BoardCommand
         Console.WriteLine($"冷排只点亮第 {first}～{last} 颗灯（白色），其他全黑。机箱灯不变。");
         Console.WriteLine("请看亮的是冷排的哪一部分（哪个风扇的哪几块、侧面灯条有没有亮）。");
         return SendOnceAndWait(null, leds, apply: false);
+    }
+
+    private static int RunOnboard(string[] values)
+    {
+        if (values.Length is < 1 or > 2
+            || !Rgb.TryParseHex(values[0], out Rgb top)
+            || !TryParseOptional(values, 1, top, out Rgb bottom))
+        {
+            return PrintUsage("onboard 后面要写一个或两个颜色，比如 board onboard FF0000。");
+        }
+
+        Console.WriteLine($"主板灯：I/O 挡板上方设成 {top}，下方设成 {bottom}。机箱灯和冷排灯不变。");
+        Console.WriteLine("请看主板上哪里亮了、颜色对不对，风扇有没有被影响。");
+
+        using var light = new MotherboardLight();
+        var lights = new[] { (MotherboardOnboardLight.IoCoverTop, top), (MotherboardOnboardLight.IoCoverBottom, bottom) };
+        if (light.SendOnboard(lights) != SendResult.Sent)
+        {
+            Console.WriteLine($"发送失败：{light.LastError ?? "原因未知"}");
+            Console.WriteLine("请先退出托盘里的 HyperLight 和 OpenRGB，再运行一次。");
+            return 1;
+        }
+
+        Console.WriteLine("已发送。看完按回车退出。");
+        Console.ReadLine();
+        return 0;
     }
 
     /// <summary>流动测试一共多久。</summary>

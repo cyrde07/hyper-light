@@ -14,6 +14,7 @@
 ///   通道 0x59：主板上印 ARGB_V2_1 —— Luca 的机箱集线板接在这里
 /// 这个对应关系是 M5-1 实测出来的（test5：机箱红、冷排蓝）。按 OpenRGB 资料推测的方向正好相反，以实测为准。
 /// 发颜色的步骤：先发"关掉自带灯效"（0x32），再按通道发颜色包（每包最多 19 颗灯）。
+/// 主板自己的单色灯（I/O 挡板上、下）走另一套"灯效"指令：每个灯发一个"静态灯效"包，最后发一个"生效"包。
 /// 不使用任何"保存到芯片"的指令（比如 0x5E、0x33），所以断电重启后主板会恢复原样。
 /// </remarks>
 internal static class MotherboardLightProtocol
@@ -56,6 +57,15 @@ internal static class MotherboardLightProtocol
 
     /// <summary>颜色包里第一颗灯的颜色从第几个字节开始。</summary>
     private const int colorDataIndex = 5;
+
+    // ───────── 主板单色灯的"灯效"包（位置从报告编号那个字节开始数） ─────────
+    private const byte onboardEffectHeaderBase = 0x20;   // 第 0～7 号灯的包头是 0x20 + 灯号
+    private const int onboardZoneMaskIndex = 2;          // 4 字节：这个包管哪些灯（第 n 号灯是 1 << n，低位在前）
+    private const int onboardEffectTypeIndex = 11;
+    private const int onboardMaxBrightnessIndex = 12;
+    private const int onboardColorIndex = 14;            // 4 字节颜色，低位在前
+    private const byte onboardStaticEffect = 0x01;       // 灯效种类：静态（固定颜色）
+    private const byte onboardFullBrightness = 0xFF;
 
     // ───────── 信息包里各字段的位置（从报告编号那个字节开始数） ─────────
     private const int productIndex = 1;
@@ -153,6 +163,59 @@ internal static class MotherboardLightProtocol
         }
 
         return reports;
+    }
+
+    /// <summary>主板单色灯在协议里的灯号。灯和灯号的对应关系全项目只写在这里（来自 OpenRGB 对 X670E AORUS PRO X 的资料）。</summary>
+    private static int OnboardLedIndexOf(MotherboardOnboardLight light) => light switch
+    {
+        MotherboardOnboardLight.IoCoverTop => 0,
+        MotherboardOnboardLight.IoCoverBottom => 3,
+        _ => throw new ArgumentOutOfRangeException(nameof(light), light, "未知的主板灯"),
+    };
+
+    /// <summary>
+    /// 生成"把一个主板单色灯设成固定颜色"的包。发完所有灯后，要再发 <see cref="BuildApplyOnboardRequest"/> 才会生效。
+    /// </summary>
+    /// <remarks>
+    /// 颜色按 OpenRGB 的写法放成 4 字节数字 0x00RRGGBB、低位在前，也就是字节顺序 蓝、绿、红、0。
+    /// 这一点 OpenRGB 资料里没写清楚，要靠测试确认（board onboard FF0000 应该是红色）。
+    /// </remarks>
+    public static byte[] BuildOnboardStaticReport(MotherboardOnboardLight light, Rgb color)
+    {
+        int led = OnboardLedIndexOf(light);
+        byte[] report = NewReport();
+        report[1] = (byte)(onboardEffectHeaderBase + led);
+        WriteUInt32(report, onboardZoneMaskIndex, 1u << led);
+        report[onboardEffectTypeIndex] = onboardStaticEffect;
+        report[onboardMaxBrightnessIndex] = onboardFullBrightness;
+        report[onboardColorIndex] = color.B;
+        report[onboardColorIndex + 1] = color.G;
+        report[onboardColorIndex + 2] = color.R;
+        return report;
+    }
+
+    /// <summary>生成"让这些主板单色灯的新颜色生效"的包。</summary>
+    public static byte[] BuildApplyOnboardRequest(IEnumerable<MotherboardOnboardLight> lights)
+    {
+        uint mask = 0;
+        foreach (MotherboardOnboardLight light in lights)
+        {
+            mask |= 1u << OnboardLedIndexOf(light);
+        }
+
+        byte[] report = NewReport();
+        report[1] = applyCommand;
+        WriteUInt32(report, onboardZoneMaskIndex, mask);
+        return report;
+    }
+
+    /// <summary>写一个 4 字节数字，低位在前。</summary>
+    private static void WriteUInt32(byte[] report, int index, uint value)
+    {
+        report[index] = (byte)value;
+        report[index + 1] = (byte)(value >> 8);
+        report[index + 2] = (byte)(value >> 16);
+        report[index + 3] = (byte)(value >> 24);
     }
 
     /// <summary>生成"读取芯片信息"的请求包。</summary>
@@ -270,6 +333,16 @@ internal enum MotherboardLightZone
 
     /// <summary>冷排灯：接在主板 ARGB_V2_2 上的水冷。协议通道 0x58。</summary>
     Radiator,
+}
+
+/// <summary>主板自己的单色灯（不是接在接口上的灯带）。每个只能整体一个颜色。</summary>
+internal enum MotherboardOnboardLight
+{
+    /// <summary>I/O 挡板上方的灯（协议灯号 0）。</summary>
+    IoCoverTop,
+
+    /// <summary>I/O 挡板下方的灯（协议灯号 3）。</summary>
+    IoCoverBottom,
 }
 
 /// <summary>主板灯光芯片回复的信息。字段含义见 <see cref="MotherboardLightProtocol"/>。</summary>

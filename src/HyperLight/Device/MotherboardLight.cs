@@ -54,6 +54,30 @@ internal sealed class MotherboardLight : IDisposable
         return Send(current, reports);
     }
 
+    /// <summary>
+    /// 把主板单色灯设成指定颜色：每个灯发一个静态灯效包，最后发一个"生效"包。
+    /// 设备方面的问题不会抛出异常，结果看返回值，原因看 <see cref="LastError"/>。
+    /// </summary>
+    public SendResult SendOnboard(IReadOnlyList<(MotherboardOnboardLight Light, Rgb Color)> lights)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+
+        HidStream? current = stream ?? TryConnect();
+        if (current is null)
+        {
+            return SendResult.NotConnected;
+        }
+
+        var reports = new List<byte[]>();
+        foreach ((MotherboardOnboardLight light, Rgb color) in lights)
+        {
+            reports.Add(MotherboardLightProtocol.BuildOnboardStaticReport(light, color));
+        }
+
+        reports.Add(MotherboardLightProtocol.BuildApplyOnboardRequest(lights.Select(entry => entry.Light)));
+        return Send(current, reports);
+    }
+
     /// <summary>发"生效"指令（M5-1 测试用，确认需不需要它）。</summary>
     public SendResult SendApply()
     {
