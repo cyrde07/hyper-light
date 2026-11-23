@@ -3,8 +3,11 @@
 namespace HyperLight.Commands;
 
 /// <summary>
-/// board 命令（M5，主板灯光）：诊断技嘉主板的灯光芯片。
-/// 现在只有探测（M5-0）：读取芯片信息，不改任何灯光。
+/// board 命令（M5，主板灯光）：诊断和测试技嘉主板的灯光芯片。
+///   board                        读取芯片信息（M5-0，不改灯光）
+///   board color 机箱色 [冷排色]   设成固定颜色（M5-1）
+///   board count                  把灯分段上色，用来数灯珠（M5-1）
+/// color 和 count 发一次就停，然后等用户按回车：用来观察程序停发后，灯能不能保持颜色。
 /// </summary>
 internal static class BoardCommand
 {
@@ -12,21 +15,145 @@ internal static class BoardCommand
     public static readonly string[] UsageLines =
     {
         "  board  主板灯光诊断：读取技嘉主板灯光芯片的信息（不改灯光），报告也存到 exe 旁边",
+        "  board color <机箱颜色> [冷排颜色] [--apply]",
+        "         把机箱灯和冷排灯设成固定颜色。只写一个颜色时两边相同。例子：board color FF0000 0000FF",
+        "  board count [--apply]",
+        "         把灯每 4 颗一段，按 红 绿 蓝 黄 青 紫 循环上色，拍照用来数灯珠",
+        "         --apply  发完颜色后再发一个\"生效\"指令（测试需不需要它）",
     };
 
-    /// <summary>执行 board 命令。</summary>
+    private const string applyOption = "--apply";
+
+    /// <summary>数灯珠时每段几颗灯。</summary>
+    private const int countBandSize = 4;
+
+    /// <summary>数灯珠时循环使用的颜色和名字。</summary>
+    private static readonly (Rgb Color, string Name)[] countColors =
+    {
+        (new Rgb(255, 0, 0), "红"),
+        (new Rgb(0, 255, 0), "绿"),
+        (new Rgb(0, 0, 255), "蓝"),
+        (new Rgb(255, 255, 0), "黄"),
+        (new Rgb(0, 255, 255), "青"),
+        (new Rgb(255, 0, 255), "紫"),
+    };
+
+    /// <summary>执行 board 命令。args 是 "board" 后面的参数。</summary>
     public static int Run(string[] args)
     {
-        if (args.Length > 0)
+        if (args.Length == 0)
         {
-            Console.WriteLine($"board 命令现在不需要参数（收到了：{string.Join(" ", args)}）。");
-            return 2;
+            return RunInfo();
         }
 
+        string sub = args[0].Trim().ToLowerInvariant();
+        string[] rest = args[1..];
+        bool apply = rest.Contains(applyOption, StringComparer.OrdinalIgnoreCase);
+        string[] values = rest.Where(arg => !arg.Equals(applyOption, StringComparison.OrdinalIgnoreCase)).ToArray();
+
+        return sub switch
+        {
+            "color" => RunColor(values, apply),
+            "count" when values.Length == 0 => RunCount(apply),
+            _ => PrintUsage($"看不懂的参数：{string.Join(" ", args)}"),
+        };
+    }
+
+    private static int RunInfo()
+    {
         string report = MotherboardLightDiagnostics.BuildReport();
         Console.Write(report);
         Console.WriteLine();
         ReportFile.SaveNextToExe("board-info", report);
         return 0;
+    }
+
+    private static int RunColor(string[] values, bool apply)
+    {
+        if (values.Length is < 1 or > 2
+            || !Rgb.TryParseHex(values[0], out Rgb caseColor)
+            || !TryParseOptional(values, 1, caseColor, out Rgb radiatorColor))
+        {
+            return PrintUsage("颜色要写成 FF0000 这种 6 位十六进制，最多两个（机箱、冷排）。");
+        }
+
+        Console.WriteLine($"机箱灯设成 {caseColor}，冷排灯设成 {radiatorColor}。");
+        Rgb[] caseLeds = Enumerable.Repeat(caseColor, MotherboardLightProtocol.MaxLedsPerZone).ToArray();
+        Rgb[] radiatorLeds = Enumerable.Repeat(radiatorColor, MotherboardLightProtocol.MaxLedsPerZone).ToArray();
+        return SendOnceAndWait(caseLeds, radiatorLeds, apply);
+    }
+
+    private static int RunCount(bool apply)
+    {
+        Rgb[] leds = new Rgb[MotherboardLightProtocol.MaxLedsPerZone];
+        for (int i = 0; i < leds.Length; i++)
+        {
+            leds[i] = countColors[i / countBandSize % countColors.Length].Color;
+        }
+
+        string order = string.Join(" → ", countColors.Select(entry => entry.Name));
+        Console.WriteLine($"数灯珠：每 {countBandSize} 颗一段，按 {order} 循环（机箱和冷排相同）。");
+        Console.WriteLine("请给每个风扇和冷排侧面灯条拍张清楚的照片，发给 Claude。");
+        return SendOnceAndWait(leds, leds, apply);
+    }
+
+    /// <summary>发一次颜色，然后等用户按回车再退出（期间不再发送）。</summary>
+    private static int SendOnceAndWait(Rgb[] caseLeds, Rgb[] radiatorLeds, bool apply)
+    {
+        using var light = new MotherboardLight();
+
+        SendResult caseResult = light.SendZone(MotherboardLightZone.Case, caseLeds);
+        if (caseResult != SendResult.Sent)
+        {
+            Console.WriteLine($"发送失败：{light.LastError ?? "原因未知"}");
+            Console.WriteLine("请先完全退出 OpenRGB，再运行一次。");
+            return 1;
+        }
+
+        SendResult radiatorResult = light.SendZone(MotherboardLightZone.Radiator, radiatorLeds);
+        if (radiatorResult != SendResult.Sent)
+        {
+            Console.WriteLine($"冷排发送失败：{light.LastError ?? "原因未知"}");
+            return 1;
+        }
+
+        if (apply && light.SendApply() != SendResult.Sent)
+        {
+            Console.WriteLine($"\"生效\"指令发送失败：{light.LastError ?? "原因未知"}");
+            return 1;
+        }
+
+        Console.WriteLine(apply ? "已发送（包括\"生效\"指令）。" : "已发送（没有发\"生效\"指令）。");
+        Console.WriteLine();
+        Console.WriteLine("现在程序已经停止发送。请看：");
+        Console.WriteLine("  1. 灯有没有变成要的颜色？");
+        Console.WriteLine("  2. 等 10 秒左右，颜色能不能一直保持？");
+        Console.WriteLine("看完按回车退出。");
+        Console.ReadLine();
+        return 0;
+    }
+
+    /// <summary>读可选的第 index 个颜色；没写就用 <paramref name="fallback"/>。写了但格式不对返回 false。</summary>
+    private static bool TryParseOptional(string[] values, int index, Rgb fallback, out Rgb color)
+    {
+        if (values.Length <= index)
+        {
+            color = fallback;
+            return true;
+        }
+
+        return Rgb.TryParseHex(values[index], out color);
+    }
+
+    private static int PrintUsage(string error)
+    {
+        Console.WriteLine(error);
+        Console.WriteLine();
+        foreach (string line in UsageLines)
+        {
+            Console.WriteLine(line);
+        }
+
+        return 2;
     }
 }
