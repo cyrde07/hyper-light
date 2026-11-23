@@ -71,8 +71,8 @@ internal sealed class TrayApp : ApplicationContext
     private bool ngenuityWarned;
     private bool openRgbWarned;
 
-    /// <summary>刚点的是开关或多选一的选项：这次点击后菜单不要关，方便连续改好几个。</summary>
-    private bool keepMenuOpen;
+    /// <summary>点了以后要关闭菜单的项（打开设置文件、重新读取设置、退出、各个选色项）。其他项点了都不关。</summary>
+    private readonly HashSet<ToolStripItem> closingItems = new();
 
     /// <summary>程序自己在设置滑动条的位置（不是用户拖的），这时不要当成修改。</summary>
     private bool updatingSlider;
@@ -116,21 +116,33 @@ internal sealed class TrayApp : ApplicationContext
         ToolStripMenuItem modeMenu = BuildChoiceMenu(
             "模式", ColorModeRules.All, ColorModeRules.TextOf, modeItems,
             mode => config.ColorMode != mode, mode => config with { ColorMode = mode });
-        freeMicColorItem = new ToolStripMenuItem("麦克风颜色…", null,
-            CloseAfter(() => PickColor(config.FreeMicColor, color => config with { FreeMicColor = color })));
-        freeCaseColorItem = new ToolStripMenuItem("机箱灯颜色…", null,
-            CloseAfter(() => PickColor(config.FreeCaseColor, color => config with { FreeCaseColor = color })));
-        freeCaseColor2Item = new ToolStripMenuItem("机箱灯第二个颜色（双色、流动用）…", null,
-            CloseAfter(() => PickColor(config.FreeCaseColor2, color => config with { FreeCaseColor2 = color })));
-        freeRadiatorColorItem = new ToolStripMenuItem("冷排灯颜色…", null,
-            CloseAfter(() => PickColor(config.FreeRadiatorColor, color => config with { FreeRadiatorColor = color })));
-        freeRadiatorColor2Item = new ToolStripMenuItem("冷排灯第二个颜色（双色、流动用）…", null,
-            CloseAfter(() => PickColor(config.FreeRadiatorColor2, color => config with { FreeRadiatorColor2 = color })));
-        freeOnboardColorItem = new ToolStripMenuItem("主板灯颜色…", null,
-            CloseAfter(() => PickColor(config.FreeOnboardColor, color => config with { FreeOnboardColor = color })));
+        ToolStripMenuItem freeAllColorItem = ClosingItem("统一选色…（所有设备、所有颜色一起改）",
+            () => PickColor(config.FreeMicColor, color => config with
+            {
+                FreeMicColor = color,
+                FreeCaseColor = color,
+                FreeCaseColor2 = color,
+                FreeRadiatorColor = color,
+                FreeRadiatorColor2 = color,
+                FreeOnboardColor = color,
+            }));
+        freeMicColorItem = ClosingItem("麦克风颜色…",
+            () => PickColor(config.FreeMicColor, color => config with { FreeMicColor = color }));
+        freeCaseColorItem = ClosingItem("机箱灯颜色…",
+            () => PickColor(config.FreeCaseColor, color => config with { FreeCaseColor = color }));
+        freeCaseColor2Item = ClosingItem("机箱灯第二个颜色（双色、流动用）…",
+            () => PickColor(config.FreeCaseColor2, color => config with { FreeCaseColor2 = color }));
+        freeRadiatorColorItem = ClosingItem("冷排灯颜色…",
+            () => PickColor(config.FreeRadiatorColor, color => config with { FreeRadiatorColor = color }));
+        freeRadiatorColor2Item = ClosingItem("冷排灯第二个颜色（双色、流动用）…",
+            () => PickColor(config.FreeRadiatorColor2, color => config with { FreeRadiatorColor2 = color }));
+        freeOnboardColorItem = ClosingItem("主板灯颜色…",
+            () => PickColor(config.FreeOnboardColor, color => config with { FreeOnboardColor = color }));
         var freeColorMenu = new ToolStripMenuItem("自由选色");
         freeColorMenu.DropDownItems.AddRange(new ToolStripItem[]
         {
+            freeAllColorItem,
+            new ToolStripSeparator(),
             freeMicColorItem,
             freeCaseColorItem,
             freeCaseColor2Item,
@@ -207,15 +219,12 @@ internal sealed class TrayApp : ApplicationContext
             onboardSourceMenu,
             new ToolStripSeparator(),
             autoStartItem,
-            new ToolStripMenuItem("打开设置文件", null, CloseAfter(OpenConfigFile)),
-            new ToolStripMenuItem("重新读取设置", null, CloseAfter(ReloadConfig)),
+            ClosingItem("打开设置文件", OpenConfigFile),
+            ClosingItem("重新读取设置", ReloadConfig),
             new ToolStripSeparator(),
-            new ToolStripMenuItem("退出", null, CloseAfter(ExitThread)),
+            ClosingItem("退出", ExitThread),
         });
         AttachKeepOpen(menu);
-
-        // 每次打开菜单都从"点了就关"开始
-        menu.Opening += (_, _) => keepMenuOpen = false;
 
         currentIcon = TrayIconPainter.Paint(null, paused: false);
         shownIconState = (null, false);
@@ -397,35 +406,36 @@ internal sealed class TrayApp : ApplicationContext
     }
 
     /// <summary>
-    /// 包装开关、多选一选项的点击动作：点完以后菜单不关，勾选马上更新，可以接着改别的。
-    /// 「打开设置文件」「重新读取设置」「退出」这些不用它，点完照常关闭菜单。
+    /// 开关、多选一选项的点击动作。点完菜单不关（由 <see cref="AttachKeepOpen"/> 处理），勾选马上更新，可以接着改别的。
     /// </summary>
-    /// <remarks>
-    /// 标记不在点击处理完后自动清掉：改设置时要等同步线程停下，等待期间 Windows 会处理排队的消息，
-    /// 如果用排队的方式清标记，会在菜单关闭之前就被清掉。所以改成在打开菜单时、点"会关闭菜单的选项"时清。
-    /// </remarks>
-    private EventHandler KeepOpen(Action action) => (_, _) =>
-    {
-        keepMenuOpen = true;
-        action();
-    };
+    private static EventHandler KeepOpen(Action action) => (_, _) => action();
 
-    /// <summary>包装「打开设置文件」「重新读取设置」「退出」这类选项：点完照常关闭菜单。</summary>
-    private EventHandler CloseAfter(Action action) => (_, _) =>
+    /// <summary>生成一个点了以后要关闭菜单的项（打开设置文件、重新读取设置、退出、各个选色项）。</summary>
+    private ToolStripMenuItem ClosingItem(string text, Action action)
     {
-        keepMenuOpen = false;
-        action();
-    };
+        var item = new ToolStripMenuItem(text, null, (_, _) => action());
+        closingItems.Add(item);
+        return item;
+    }
 
     /// <summary>给菜单和它所有的子菜单挂上"点了开关不关闭"的处理。</summary>
+    /// <remarks>
+    /// Windows 菜单（WinForms 8.0 源码）的处理顺序是：先通知"点了哪一项"（ItemClicked），
+    /// 紧接着检查"自动关闭"（AutoClose）开着就关闭菜单，最后才执行这一项的点击动作。
+    /// 所以在"点了哪一项"这一步，把整个菜单的"自动关闭"暂时关掉，菜单就根本不会开始关闭；
+    /// 等这次点击全部处理完，再把"自动关闭"打开，点菜单外面照常能关。
+    /// </remarks>
     private void AttachKeepOpen(ToolStripDropDown dropDown)
     {
-        dropDown.Closing += (_, e) =>
+        dropDown.ItemClicked += (_, e) =>
         {
-            if (keepMenuOpen && e.CloseReason == ToolStripDropDownCloseReason.ItemClicked)
+            if (e.ClickedItem is null || closingItems.Contains(e.ClickedItem))
             {
-                e.Cancel = true;
+                return;
             }
+
+            SetAutoClose(menu, false);
+            menu.BeginInvoke(() => SetAutoClose(menu, true));
         };
 
         foreach (ToolStripItem item in dropDown.Items)
@@ -433,6 +443,19 @@ internal sealed class TrayApp : ApplicationContext
             if (item is ToolStripMenuItem { HasDropDownItems: true } parent)
             {
                 AttachKeepOpen(parent.DropDown);
+            }
+        }
+    }
+
+    /// <summary>把菜单和它所有子菜单的"自动关闭"一起打开或关掉。</summary>
+    private static void SetAutoClose(ToolStripDropDown dropDown, bool autoClose)
+    {
+        dropDown.AutoClose = autoClose;
+        foreach (ToolStripItem item in dropDown.Items)
+        {
+            if (item is ToolStripMenuItem { HasDropDownItems: true } parent)
+            {
+                SetAutoClose(parent.DropDown, autoClose);
             }
         }
     }
