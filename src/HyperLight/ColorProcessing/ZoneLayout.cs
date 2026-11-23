@@ -16,6 +16,18 @@ internal enum ZoneLayout
     LeftRight,
 }
 
+/// <summary>取色方式用壁纸的哪两块区域。对应关系只写在这里。</summary>
+internal static class ZoneLayoutRegions
+{
+    /// <summary>麦克风上灯区、下灯区分别取哪块区域的颜色。</summary>
+    public static (ColorSource Upper, ColorSource Lower) Of(ZoneLayout layout) => layout switch
+    {
+        ZoneLayout.TopBottom => (ColorSource.Upper, ColorSource.Lower),
+        ZoneLayout.LeftRight => (ColorSource.Left, ColorSource.Right),
+        _ => (ColorSource.Average, ColorSource.Average),
+    };
+}
+
 /// <summary>取色方式的中文名字。托盘菜单和命令行显示都用这里，说法只写一处。</summary>
 internal static class ZoneLayoutText
 {

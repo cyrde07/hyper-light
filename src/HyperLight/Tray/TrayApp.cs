@@ -10,7 +10,7 @@ namespace HyperLight.Tray;
 /// <summary>
 /// 托盘程序（M4）：屏幕右下角一个小圆点图标，上下两半显示当前的上、下两个颜色。
 /// 右键菜单：状态（麦克风、主板）、暂停 / 恢复、增强颜色、取色方式、
-/// 麦克风 / 机箱灯 / 冷排灯的开关和取色、开机自启、打开设置文件、重新读取设置、退出。
+/// 麦克风 / 机箱灯 / 冷排灯的开关，机箱灯和冷排灯的取色和灯效、开机自启、打开设置文件、重新读取设置、退出。
 /// </summary>
 /// <remarks>
 /// 界面只在主线程（界面线程）里操作。同步工作在 <see cref="SyncEngine"/> 自己的线程里进行，
@@ -38,8 +38,12 @@ internal sealed class TrayApp : ApplicationContext
     private readonly ToolStripMenuItem micItem;
     private readonly ToolStripMenuItem caseItem;
     private readonly ToolStripMenuItem radiatorItem;
+    private readonly ToolStripMenuItem caseSourceMenu;
+    private readonly ToolStripMenuItem radiatorSourceMenu;
     private readonly Dictionary<ColorSource, ToolStripMenuItem> caseSourceItems = new();
     private readonly Dictionary<ColorSource, ToolStripMenuItem> radiatorSourceItems = new();
+    private readonly Dictionary<LightEffect, ToolStripMenuItem> caseEffectItems = new();
+    private readonly Dictionary<LightEffect, ToolStripMenuItem> radiatorEffectItems = new();
     private readonly ToolStripMenuItem autoStartItem;
     private readonly System.Windows.Forms.Timer refreshTimer;
 
@@ -96,12 +100,18 @@ internal sealed class TrayApp : ApplicationContext
         micItem = new ToolStripMenuItem("麦克风", null, (_, _) => ApplyConfig(config with { MicEnabled = !config.MicEnabled }));
         caseItem = new ToolStripMenuItem("机箱灯", null, (_, _) => ApplyConfig(config with { CaseEnabled = !config.CaseEnabled }));
         radiatorItem = new ToolStripMenuItem("冷排灯", null, (_, _) => ApplyConfig(config with { RadiatorEnabled = !config.RadiatorEnabled }));
-        ToolStripMenuItem caseSourceMenu = BuildSourceMenu(
-            "机箱灯取色", caseSourceItems, source => config.CaseColorSource != source,
-            source => config with { CaseColorSource = source });
-        ToolStripMenuItem radiatorSourceMenu = BuildSourceMenu(
-            "冷排灯取色", radiatorSourceItems, source => config.RadiatorColorSource != source,
-            source => config with { RadiatorColorSource = source });
+        caseSourceMenu = BuildChoiceMenu(
+            "机箱灯取色", ColorSourceRules.All, ColorSourceRules.TextOf, caseSourceItems,
+            source => config.CaseColorSource != source, source => config with { CaseColorSource = source });
+        radiatorSourceMenu = BuildChoiceMenu(
+            "冷排灯取色", ColorSourceRules.All, ColorSourceRules.TextOf, radiatorSourceItems,
+            source => config.RadiatorColorSource != source, source => config with { RadiatorColorSource = source });
+        ToolStripMenuItem caseEffectMenu = BuildChoiceMenu(
+            "机箱灯灯效", LightEffectRules.All, LightEffectRules.TextOf, caseEffectItems,
+            effect => config.CaseEffect != effect, effect => config with { CaseEffect = effect });
+        ToolStripMenuItem radiatorEffectMenu = BuildChoiceMenu(
+            "冷排灯灯效", LightEffectRules.All, LightEffectRules.TextOf, radiatorEffectItems,
+            effect => config.RadiatorEffect != effect, effect => config with { RadiatorEffect = effect });
         autoStartItem = new ToolStripMenuItem("开机自启", null, (_, _) => ToggleAutoStart());
 
         menu = new ContextMenuStrip();
@@ -117,8 +127,10 @@ internal sealed class TrayApp : ApplicationContext
             micItem,
             caseItem,
             caseSourceMenu,
+            caseEffectMenu,
             radiatorItem,
             radiatorSourceMenu,
+            radiatorEffectMenu,
             new ToolStripSeparator(),
             autoStartItem,
             new ToolStripMenuItem("打开设置文件", null, (_, _) => OpenConfigFile()),
@@ -242,44 +254,56 @@ internal sealed class TrayApp : ApplicationContext
         micItem.Checked = config.MicEnabled;
         caseItem.Checked = config.CaseEnabled;
         radiatorItem.Checked = config.RadiatorEnabled;
-        foreach ((ColorSource source, ToolStripMenuItem item) in caseSourceItems)
-        {
-            item.Checked = source == config.CaseColorSource;
-        }
+        CheckOnly(caseSourceItems, config.CaseColorSource);
+        CheckOnly(radiatorSourceItems, config.RadiatorColorSource);
+        CheckOnly(caseEffectItems, config.CaseEffect);
+        CheckOnly(radiatorEffectItems, config.RadiatorEffect);
 
-        foreach ((ColorSource source, ToolStripMenuItem item) in radiatorSourceItems)
-        {
-            item.Checked = source == config.RadiatorColorSource;
-        }
+        // 流动灯效用的是固定的两块区域，取色只在单色时有用：不用时变灰，免得以为点了没反应
+        caseSourceMenu.Enabled = config.CaseEffect == LightEffect.Solid;
+        radiatorSourceMenu.Enabled = config.RadiatorEffect == LightEffect.Solid;
 
         autoStartItem.Checked = IsAutoStartEnabledSafe();
     }
 
     /// <summary>
-    /// 生成一个取色子菜单（上半区 / 下半区 / 上下平均）。机箱灯和冷排灯共用这个写法。
-    /// <paramref name="isChange"/> 判断点的是不是和现在不同的选项；<paramref name="withSource"/> 生成改好的新设置。
+    /// 生成一个"多选一"子菜单（比如取色、灯效）。机箱灯和冷排灯的取色、灯效都用这个写法。
+    /// <paramref name="isChange"/> 判断点的是不是和现在不同的选项；<paramref name="withChoice"/> 生成改好的新设置。
     /// </summary>
-    private ToolStripMenuItem BuildSourceMenu(
+    private ToolStripMenuItem BuildChoiceMenu<T>(
         string title,
-        Dictionary<ColorSource, ToolStripMenuItem> items,
-        Func<ColorSource, bool> isChange,
-        Func<ColorSource, AppConfig> withSource)
+        IEnumerable<T> choices,
+        Func<T, string> textOf,
+        Dictionary<T, ToolStripMenuItem> items,
+        Func<T, bool> isChange,
+        Func<T, AppConfig> withChoice)
+        where T : notnull
     {
-        var sourceMenu = new ToolStripMenuItem(title);
-        foreach (ColorSource source in ColorSourceRules.All)
+        var choiceMenu = new ToolStripMenuItem(title);
+        foreach (T choice in choices)
         {
-            var item = new ToolStripMenuItem(ColorSourceRules.TextOf(source), null, (_, _) =>
+            var item = new ToolStripMenuItem(textOf(choice), null, (_, _) =>
             {
-                if (isChange(source))
+                if (isChange(choice))
                 {
-                    ApplyConfig(withSource(source));
+                    ApplyConfig(withChoice(choice));
                 }
             });
-            items[source] = item;
-            sourceMenu.DropDownItems.Add(item);
+            items[choice] = item;
+            choiceMenu.DropDownItems.Add(item);
         }
 
-        return sourceMenu;
+        return choiceMenu;
+    }
+
+    /// <summary>"多选一"菜单里只勾选当前的那一项。</summary>
+    private static void CheckOnly<T>(Dictionary<T, ToolStripMenuItem> items, T current)
+        where T : notnull
+    {
+        foreach ((T choice, ToolStripMenuItem item) in items)
+        {
+            item.Checked = EqualityComparer<T>.Default.Equals(choice, current);
+        }
     }
 
     // ───────────────────────── 菜单操作 ─────────────────────────

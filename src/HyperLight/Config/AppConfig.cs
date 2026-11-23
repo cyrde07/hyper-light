@@ -54,11 +54,23 @@ internal sealed record AppConfig
     [Description("冷排灯（主板 ARGB_V2_2 上的水冷）：true 跟着壁纸变色；false 不再改变，停在最后的颜色。默认 true")]
     public bool RadiatorEnabled { get; init; } = true;
 
-    [Description("机箱灯取色：upper 上半区（用上灯区的颜色）；lower 下半区；average 上下平均。默认 lower")]
+    [Description("机箱灯取色（灯效是单色时用）：upper 上半区；lower 下半区；left 左半区；right 右半区；average 整张。默认 lower")]
     public ColorSource CaseColorSource { get; init; } = ColorSource.Lower;
 
-    [Description("冷排灯取色：upper 上半区（用上灯区的颜色）；lower 下半区；average 上下平均。默认 upper（冷排在机箱顶部）")]
+    [Description("冷排灯取色（灯效是单色时用）：upper 上半区；lower 下半区；left 左半区；right 右半区；average 整张。默认 upper（冷排在机箱顶部）")]
     public ColorSource RadiatorColorSource { get; init; } = ColorSource.Upper;
+
+    [Description("机箱灯灯效：solid 单色（按取色）；flowLeftRight 左右流动（左半区和右半区的颜色在风扇上转圈）；flowUpDown 上下流动（上半区和下半区）。默认 solid")]
+    public LightEffect CaseEffect { get; init; } = LightEffect.Solid;
+
+    [Description("冷排灯灯效：solid 单色（按取色）；flowLeftRight 左右流动；flowUpDown 上下流动。默认 solid")]
+    public LightEffect RadiatorEffect { get; init; } = LightEffect.Solid;
+
+    [Description("流动速度（毫秒）：流动灯效转一整圈要多久。数值越小转得越快。默认 2000。范围 500～20000")]
+    public int FlowCycleMs { get; init; } = 2000;
+
+    [Description("流动图案每几颗灯重复一次。底部、侧面风扇是 8 颗灯，后置风扇 16 颗；默认 8，每个风扇正好一整圈。范围 2～64")]
+    public int FlowPeriodLeds { get; init; } = 8;
 
     [Description("机箱灯的灯珠数：发颜色时发给多少颗灯。数多了没关系，数少了后面的灯不会变色。默认 256（主板接口的上限）。范围 1～256")]
     public int CaseLedCount { get; init; } = 256;
@@ -144,7 +156,7 @@ internal sealed record AppConfig
         }
     }
 
-    /// <summary>把每一项的数值检查一遍，超出范围的改回默认值。开关（true / false）和取色方式、取色来源（读取时已检查）不需要再检查。</summary>
+    /// <summary>把每一项的数值检查一遍，超出范围的改回默认值。开关（true / false）和取色方式、取色来源、灯效（读取时已检查）不需要再检查。</summary>
     private AppConfig Validated(List<string> notes)
     {
         var defaults = new AppConfig();
@@ -159,6 +171,8 @@ internal sealed record AppConfig
             SaturationBoost = InRange(nameof(SaturationBoost), SaturationBoost, 1.0, 3.0, defaults.SaturationBoost, notes),
             CaseLedCount = InRange(nameof(CaseLedCount), CaseLedCount, 1, MotherboardLightProtocol.MaxLedsPerZone, defaults.CaseLedCount, notes),
             RadiatorLedCount = InRange(nameof(RadiatorLedCount), RadiatorLedCount, 1, MotherboardLightProtocol.MaxLedsPerZone, defaults.RadiatorLedCount, notes),
+            FlowCycleMs = InRange(nameof(FlowCycleMs), FlowCycleMs, 500, 20_000, defaults.FlowCycleMs, notes),
+            FlowPeriodLeds = InRange(nameof(FlowPeriodLeds), FlowPeriodLeds, 2, 64, defaults.FlowPeriodLeds, notes),
         };
     }
 

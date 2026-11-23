@@ -111,8 +111,8 @@ internal static class SyncCommand
             + $"取色方式：{ZoneLayoutText.Of(config.ZoneLayout)}");
         Console.WriteLine(
             $"麦克风：{(config.MicEnabled ? "开" : "关")}    "
-            + $"机箱灯：{BoardSetting(config.CaseEnabled, config.CaseColorSource)}    "
-            + $"冷排灯：{BoardSetting(config.RadiatorEnabled, config.RadiatorColorSource)}");
+            + $"机箱灯：{SyncEngine.DescribeBoardZone(config.CaseEnabled, config.CaseColorSource, config.CaseEffect)}    "
+            + $"冷排灯：{SyncEngine.DescribeBoardZone(config.RadiatorEnabled, config.RadiatorColorSource, config.RadiatorEffect)}");
         Console.WriteLine($"配置文件：{AppConfig.DefaultPath}");
         foreach (string note in notes)
         {
@@ -176,10 +176,6 @@ internal static class SyncCommand
             $"麦克风 {mic} | 截图 {status.LastCaptureMs:0.0} 毫秒 | 发送 {sendFps:0.0} 帧/秒"
             + $" | CPU {usage.CpuPercent:0.0}% | 内存 {usage.MemoryMb:0} MB");
     }
-
-    /// <summary>主板灯区的设置显示成"开（下半区）"或"关"。</summary>
-    private static string BoardSetting(bool enabled, ColorSource source) =>
-        enabled ? $"开（{ColorSourceRules.TextOf(source)}）" : "关";
 
     /// <summary>两个灯区的颜色显示成"上 色块 十六进制  下 色块 十六进制"。</summary>
     private static string ZoneSwatch(ZoneColors colors, bool colorBlocks) =>

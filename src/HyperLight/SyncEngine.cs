@@ -56,11 +56,12 @@ internal sealed record SyncStatus
 /// <summary>
 /// 同步引擎：截壁纸 → 算两个灯区的平均色 → 增强颜色 → 变化过滤 → 发给麦克风和主板灯。
 /// 三个线程：
-///   截图线程：每隔 CaptureIntervalMs 截一次壁纸，算颜色，交给两个 <see cref="ColorChangeFilter"/>（上、下灯区各一个）。
+///   截图线程：每隔 CaptureIntervalMs 截一次壁纸，算出上、下、左、右、整张五块区域的颜色，
+///             每块区域交给自己的 <see cref="ColorChangeFilter"/>。麦克风按取色方式用其中两块，主板灯按取色来源或灯效用。
 ///   发送线程：每隔 SendIntervalMs 把"此刻应该显示的颜色"发给麦克风。
 ///             麦克风一停止接收就会恢复自带灯效，所以这个线程不能被截图卡住，两件事必须分开。
-///   主板线程：同样每隔 SendIntervalMs 看一次颜色，但只在颜色变了时才发给主板（机箱灯、冷排灯）。
-///             M5-1 实测主板停止接收后会保持颜色，所以不用一直发；
+///   主板线程：单色灯效只在颜色变了时才发给主板（M5-1 实测主板停止接收后会保持颜色，不用一直发）；
+///             流动灯效要一直发（每秒约 20 次），图案才会转。
 ///             主板每次要发很多个包（比麦克风慢），单独一个线程，不会拖慢麦克风。
 /// 找不到壁纸超过 WallpaperLostGraceMs，或者暂停时，麦克风停止发送、回到自带灯效；主板灯保持最后的颜色。
 /// sync 命令和托盘程序都使用它。
@@ -76,12 +77,18 @@ internal sealed class SyncEngine : IDisposable
     /// <summary>颜色变化超过这个值（0～255），就当作"突变"记下来（多半是换了壁纸）。</summary>
     private const int bigColorJump = 60;
 
+    /// <summary>流动灯效多久发一帧（每秒约 20 帧，转起来够流畅，USB 负担也不大）。</summary>
+    private static readonly TimeSpan flowFrameInterval = TimeSpan.FromMilliseconds(50);
+
     /// <summary>停止时最多等每个线程收尾多久。</summary>
     private static readonly TimeSpan stopTimeout = TimeSpan.FromSeconds(5);
 
     private readonly AppConfig config;
-    private readonly ColorChangeFilter upperFilter;
-    private readonly ColorChangeFilter lowerFilter;
+    /// <summary>每块区域一个颜色过滤器。截图线程一起设置、一起清空。</summary>
+    private readonly Dictionary<ColorSource, ColorChangeFilter> filters = new();
+
+    /// <summary>麦克风上、下灯区分别用哪块区域（由取色方式决定）。</summary>
+    private readonly (ColorSource Upper, ColorSource Lower) micRegions;
     private readonly Stopwatch clock = new();
     private readonly CancellationTokenSource stopping = new();
     private readonly object statusGate = new();
@@ -103,8 +110,12 @@ internal sealed class SyncEngine : IDisposable
     {
         this.config = config;
         var fade = TimeSpan.FromMilliseconds(config.FadeMs);
-        upperFilter = new ColorChangeFilter(config.ChangeThreshold, fade, config.ConfirmCaptures);
-        lowerFilter = new ColorChangeFilter(config.ChangeThreshold, fade, config.ConfirmCaptures);
+        foreach (ColorSource region in Enum.GetValues<ColorSource>())
+        {
+            filters[region] = new ColorChangeFilter(config.ChangeThreshold, fade, config.ConfirmCaptures);
+        }
+
+        micRegions = ZoneLayoutRegions.Of(config.ZoneLayout);
     }
 
     /// <summary>当前状态快照。任何线程都可以读。</summary>
@@ -234,7 +245,7 @@ internal sealed class SyncEngine : IDisposable
         }
 
         TimeSpan captureStart = clock.Elapsed;
-        ZoneColors colors;
+        WallpaperColors colors;
         try
         {
             if (target is not WallpaperTarget found || !capturer.TryCapture(found))
@@ -249,7 +260,7 @@ internal sealed class SyncEngine : IDisposable
                 return null;
             }
 
-            colors = Enhance(ColorAverager.AverageZones(capturer.Pixels, capturer.Width, capturer.Height, config.ZoneLayout));
+            colors = Enhance(ColorAverager.AverageRegions(capturer.Pixels, capturer.Width, capturer.Height));
             target = found;
         }
         finally
@@ -260,13 +271,24 @@ internal sealed class SyncEngine : IDisposable
 
         TimeSpan now = clock.Elapsed;
         ZoneColors? before = CurrentTarget();
-        bool upperChanged = upperFilter.Offer(colors.Upper, now);
-        bool lowerChanged = lowerFilter.Offer(colors.Lower, now);
-        if (before is ZoneColors old && ZoneDifference(old, colors) >= bigColorJump)
+        var micColors = new ZoneColors(colors.Get(micRegions.Upper), colors.Get(micRegions.Lower));
+
+        // 每块区域都要交给自己的过滤器（不能因为前面的变了就跳过后面的）
+        bool micChanged = false;
+        foreach ((ColorSource region, ColorChangeFilter filter) in filters)
         {
-            StallLog.Write("颜色", upperChanged || lowerChanged
-                ? $"颜色突变：{old} → {colors}（已切换；多半是换了壁纸）"
-                : $"颜色突变：{old} → {colors}（先不切换，等下次截图确认；一闪而过的过渡画面会被忽略）");
+            bool changed = filter.Offer(colors.Get(region), now);
+            if (region == micRegions.Upper || region == micRegions.Lower)
+            {
+                micChanged |= changed;
+            }
+        }
+
+        if (before is ZoneColors old && ZoneDifference(old, micColors) >= bigColorJump)
+        {
+            StallLog.Write("颜色", micChanged
+                ? $"颜色突变：{old} → {micColors}（已切换；多半是换了壁纸）"
+                : $"颜色突变：{old} → {micColors}（先不切换，等下次截图确认；一闪而过的过渡画面会被忽略）");
         }
         double captureMs = (clock.Elapsed - captureStart).TotalMilliseconds;
         lastSuccess = now;
@@ -275,9 +297,9 @@ internal sealed class SyncEngine : IDisposable
         UpdateStatus(s => s with
         {
             WallpaperState = "已找到壁纸，正在同步",
-            Captured = colors,
+            Captured = micColors,
             Target = targetColors,
-            ColorChanges = s.ColorChanges + (upperChanged || lowerChanged ? 1 : 0),
+            ColorChanges = s.ColorChanges + (micChanged ? 1 : 0),
             LastCaptureMs = captureMs,
             LastError = null,
         });
@@ -315,12 +337,10 @@ internal sealed class SyncEngine : IDisposable
     private static int ZoneDifference(ZoneColors a, ZoneColors b) =>
         Math.Max(ColorChangeFilter.Difference(a.Upper, b.Upper), ColorChangeFilter.Difference(a.Lower, b.Lower));
 
-    /// <summary>增强颜色打开时，两个灯区都提高饱和度。</summary>
-    private ZoneColors Enhance(ZoneColors colors) =>
+    /// <summary>增强颜色打开时，每块区域都提高饱和度。</summary>
+    private WallpaperColors Enhance(WallpaperColors colors) =>
         config.BoostColors
-            ? new ZoneColors(
-                ColorEnhancer.BoostSaturation(colors.Upper, config.SaturationBoost),
-                ColorEnhancer.BoostSaturation(colors.Lower, config.SaturationBoost))
+            ? colors.Map(color => ColorEnhancer.BoostSaturation(color, config.SaturationBoost))
             : colors;
 
     /// <summary>找不到壁纸或截图失败：宽限期内继续发上一次的颜色，超过宽限期就停止发送。</summary>
@@ -328,8 +348,10 @@ internal sealed class SyncEngine : IDisposable
     {
         if (clock.Elapsed - lastSuccess >= lostGrace)
         {
-            upperFilter.Clear();
-            lowerFilter.Clear();
+            foreach (ColorChangeFilter filter in filters.Values)
+            {
+                filter.Clear();
+            }
         }
 
         ZoneColors? targetColors = CurrentTarget();
@@ -339,9 +361,14 @@ internal sealed class SyncEngine : IDisposable
         UpdateStatus(s => s with { WallpaperState = state, Target = targetColors });
     }
 
-    /// <summary>两个灯区的目标颜色。任何一个没有颜色就返回 null（两个过滤器总是一起设置、一起清空）。</summary>
+    /// <summary>麦克风两个灯区的目标颜色。任何一个没有颜色就返回 null（过滤器总是一起设置、一起清空）。</summary>
     private ZoneColors? CurrentTarget() =>
-        upperFilter.Target is Rgb upper && lowerFilter.Target is Rgb lower ? new ZoneColors(upper, lower) : null;
+        filters[micRegions.Upper].Target is Rgb upper && filters[micRegions.Lower].Target is Rgb lower
+            ? new ZoneColors(upper, lower)
+            : null;
+
+    /// <summary>某块区域此刻应该显示的颜色（渐变中的颜色）。还没有颜色时返回 null。</summary>
+    private Rgb? CurrentOf(ColorSource region, TimeSpan now) => filters[region].Current(now);
 
     // ───────────────────────── 发送线程 ─────────────────────────
 
@@ -413,7 +440,7 @@ internal sealed class SyncEngine : IDisposable
         }
 
         TimeSpan now = clock.Elapsed;
-        if (upperFilter.Current(now) is not Rgb upper || lowerFilter.Current(now) is not Rgb lower)
+        if (CurrentOf(micRegions.Upper, now) is not Rgb upper || CurrentOf(micRegions.Lower, now) is not Rgb lower)
         {
             UpdateStatus(s => s with { MicState = "没有颜色可发，麦克风显示自带灯效" });
             return;
@@ -446,8 +473,8 @@ internal sealed class SyncEngine : IDisposable
 
     // ───────────────────────── 主板线程 ─────────────────────────
 
-    /// <summary>一个要同步的主板灯区，以及它的取色来源和灯珠数。</summary>
-    private readonly record struct BoardZoneSetting(MotherboardLightZone Zone, ColorSource Source, int LedCount);
+    /// <summary>一个要同步的主板灯区，以及它的取色来源、灯效和灯珠数。</summary>
+    private readonly record struct BoardZoneSetting(MotherboardLightZone Zone, ColorSource Source, LightEffect Effect, int LedCount);
 
     /// <summary>按配置列出打开了同步的主板灯区。配置和灯区的对应关系只写在这里。</summary>
     private List<BoardZoneSetting> EnabledBoardZones()
@@ -455,12 +482,12 @@ internal sealed class SyncEngine : IDisposable
         var zones = new List<BoardZoneSetting>();
         if (config.CaseEnabled)
         {
-            zones.Add(new BoardZoneSetting(MotherboardLightZone.Case, config.CaseColorSource, config.CaseLedCount));
+            zones.Add(new BoardZoneSetting(MotherboardLightZone.Case, config.CaseColorSource, config.CaseEffect, config.CaseLedCount));
         }
 
         if (config.RadiatorEnabled)
         {
-            zones.Add(new BoardZoneSetting(MotherboardLightZone.Radiator, config.RadiatorColorSource, config.RadiatorLedCount));
+            zones.Add(new BoardZoneSetting(MotherboardLightZone.Radiator, config.RadiatorColorSource, config.RadiatorEffect, config.RadiatorLedCount));
         }
 
         return zones;
@@ -476,10 +503,12 @@ internal sealed class SyncEngine : IDisposable
             return;
         }
 
-        var interval = TimeSpan.FromMilliseconds(config.SendIntervalMs);
+        // 有流动灯效时要一直发，按流动的帧率走；全是单色时只是看看颜色有没有变，按发送间隔走
+        bool anyFlow = zones.Any(zone => zone.Effect != LightEffect.Solid);
+        TimeSpan interval = anyFlow ? flowFrameInterval : TimeSpan.FromMilliseconds(config.SendIntervalMs);
         using var board = new MotherboardLight();
 
-        // 每个灯区最后一次成功发出的颜色。颜色没变就不发；连接出问题时清空，重新连上后全部重发
+        // 单色灯区最后一次成功发出的颜色。颜色没变就不发；连接出问题时清空，重新连上后全部重发
         var lastSent = new Dictionary<MotherboardLightZone, Rgb>();
 
         while (!stopping.IsCancellationRequested)
@@ -509,24 +538,23 @@ internal sealed class SyncEngine : IDisposable
         }
 
         TimeSpan now = clock.Elapsed;
-        if (upperFilter.Current(now) is not Rgb upper || lowerFilter.Current(now) is not Rgb lower)
+        if (CurrentOf(ColorSource.Average, now) is null)
         {
             UpdateStatus(s => s with { BoardState = "没有颜色可发，机箱灯和冷排灯保持当前颜色" });
             return;
         }
 
-        var colors = new ZoneColors(upper, lower);
         SendResult result = SendResult.Sent;
         foreach (BoardZoneSetting setting in zones)
         {
-            Rgb color = ColorSourceRules.Pick(colors, setting.Source);
-            if (lastSent.TryGetValue(setting.Zone, out Rgb sent) && sent == color)
+            Rgb[]? leds = BuildBoardLeds(setting, now, lastSent);
+            if (leds is null)
             {
                 continue;
             }
 
             TimeSpan sendStart = clock.Elapsed;
-            result = board.SendZone(setting.Zone, Enumerable.Repeat(color, setting.LedCount).ToArray());
+            result = board.SendZone(setting.Zone, leds);
             TimeSpan took = clock.Elapsed - sendStart;
             if (took > stallThreshold)
             {
@@ -540,7 +568,10 @@ internal sealed class SyncEngine : IDisposable
                 break;
             }
 
-            lastSent[setting.Zone] = color;
+            if (setting.Effect == LightEffect.Solid)
+            {
+                lastSent[setting.Zone] = leds[0];
+            }
         }
 
         string boardState = result switch
@@ -567,16 +598,56 @@ internal sealed class SyncEngine : IDisposable
         UpdateStatus(s => s with { BoardState = boardState, BoardConnected = connected });
     }
 
+    /// <summary>
+    /// 生成一个灯区这一帧要发的所有灯的颜色。不需要发时返回 null：
+    /// 单色而且颜色和上次发的一样；或者要用的区域暂时还没有颜色（截图线程正好在设置过滤器）。
+    /// </summary>
+    private Rgb[]? BuildBoardLeds(BoardZoneSetting setting, TimeSpan now, Dictionary<MotherboardLightZone, Rgb> lastSent)
+    {
+        if (LightEffectRules.FlowRegionsOf(setting.Effect) is (ColorSource firstRegion, ColorSource secondRegion))
+        {
+            if (CurrentOf(firstRegion, now) is not Rgb first || CurrentOf(secondRegion, now) is not Rgb second)
+            {
+                return null;
+            }
+
+            double cyclePosition = now.TotalMilliseconds / config.FlowCycleMs;
+            return LightEffectRules.BuildFlow(first, second, setting.LedCount, config.FlowPeriodLeds, cyclePosition);
+        }
+
+        if (CurrentOf(setting.Source, now) is not Rgb color
+            || (lastSent.TryGetValue(setting.Zone, out Rgb sent) && sent == color))
+        {
+            return null;
+        }
+
+        return Enumerable.Repeat(color, setting.LedCount).ToArray();
+    }
+
     // ───────────────────────── 小工具 ─────────────────────────
 
     /// <summary>启动日志里的设备设置，比如"麦克风 开，机箱灯 开（下半区），冷排灯 关"。</summary>
     private string DescribeDevices()
     {
         static string OnOff(bool enabled) => enabled ? "开" : "关";
-        string Board(bool enabled, ColorSource source) =>
-            enabled ? $"开（{ColorSourceRules.TextOf(source)}）" : "关";
+        return $"麦克风 {OnOff(config.MicEnabled)}，"
+            + $"机箱灯 {DescribeBoardZone(config.CaseEnabled, config.CaseColorSource, config.CaseEffect)}，"
+            + $"冷排灯 {DescribeBoardZone(config.RadiatorEnabled, config.RadiatorColorSource, config.RadiatorEffect)}";
+    }
 
-        return $"麦克风 {OnOff(config.MicEnabled)}，机箱灯 {Board(config.CaseEnabled, config.CaseColorSource)}，冷排灯 {Board(config.RadiatorEnabled, config.RadiatorColorSource)}";
+    /// <summary>
+    /// 一个主板灯区的设置说明，比如"开（单色，下半区）""开（左右流动）""关"。日志、命令行显示共用。
+    /// </summary>
+    public static string DescribeBoardZone(bool enabled, ColorSource source, LightEffect effect)
+    {
+        if (!enabled)
+        {
+            return "关";
+        }
+
+        return effect == LightEffect.Solid
+            ? $"开（{LightEffectRules.TextOf(effect)}，{ColorSourceRules.TextOf(source)}）"
+            : $"开（{LightEffectRules.TextOf(effect)}）";
     }
 
     private void UpdateStatus(Func<SyncStatus, SyncStatus> change)
