@@ -13,7 +13,7 @@ namespace HyperLight;
 /// 不带参数运行（双击 exe、开机自启）：启动托盘程序，这是平时用的方式。
 /// 带命令运行：诊断工具，要在 .bat 或命令行里用。
 ///   list（M0 设备诊断）、color（M1 固定颜色测试）、probe（方案 A 测试）、sync（壁纸同步，命令行版）、
-///   board（M5 主板灯光诊断）。
+///   board（M5 主板灯光诊断）、gpu（显卡灯光诊断）。
 /// </summary>
 internal static class Program
 {
@@ -44,6 +44,7 @@ internal static class Program
                 "probe" => ProbeCommand.Run(),
                 "sync" => SyncCommand.Run(),
                 "board" => BoardCommand.Run(args[1..]),
+                "gpu" => GpuCommand.Run(args[1..]),
                 "help" or "-h" or "--help" or "/?" => PrintUsage(),
                 _ => PrintUnknownCommand(command),
             };
@@ -74,7 +75,7 @@ internal static class Program
         Console.WriteLine("  HyperLight.exe          不带命令：启动托盘程序（平时就这样用，双击 exe 也是这样）");
         Console.WriteLine("  HyperLight.exe <命令>   诊断工具，请在 .bat 文件里运行：");
         Console.WriteLine("  list   列出所有 HID 设备，找出 QuadCast S，并检查 NGENUITY 是否在运行");
-        foreach (string line in ColorCommand.UsageLines.Concat(ProbeCommand.UsageLines).Concat(SyncCommand.UsageLines).Concat(BoardCommand.UsageLines))
+        foreach (string line in ColorCommand.UsageLines.Concat(ProbeCommand.UsageLines).Concat(SyncCommand.UsageLines).Concat(BoardCommand.UsageLines).Concat(GpuCommand.UsageLines))
         {
             Console.WriteLine(line);
         }
