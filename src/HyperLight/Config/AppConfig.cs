@@ -60,16 +60,19 @@ internal sealed record AppConfig
     [Description("冷排灯取色（灯效是单色时用）：upper 上半区；lower 下半区；left 左半区；right 右半区；average 整张。默认 upper（冷排在机箱顶部）")]
     public ColorSource RadiatorColorSource { get; init; } = ColorSource.Upper;
 
-    [Description("机箱灯灯效：solid 单色（按取色）；flowLeftRight 左右流动（左半区和右半区的颜色在风扇上转圈）；flowUpDown 上下流动（上半区和下半区）。默认 solid")]
+    [Description("机箱灯灯效：solid 单色（按取色）；splitLeftRight 左右双色（每个风扇一半左半区颜色、一半右半区颜色）；splitUpDown 上下双色；flowLeftRight 左右流动（两个颜色在风扇上转圈）；flowUpDown 上下流动。默认 solid")]
     public LightEffect CaseEffect { get; init; } = LightEffect.Solid;
 
-    [Description("冷排灯灯效：solid 单色（按取色）；flowLeftRight 左右流动；flowUpDown 上下流动。默认 solid")]
+    [Description("冷排灯灯效：solid 单色；splitLeftRight 左右双色；splitUpDown 上下双色；flowLeftRight 左右流动；flowUpDown 上下流动。默认 solid")]
     public LightEffect RadiatorEffect { get; init; } = LightEffect.Solid;
+
+    [Description("加大差异（0～100）：双色、流动灯效里两个颜色太像时，自动拉开多少（不撞色，还是同一个色系；灰色会变成一亮一暗）。0 表示关闭。托盘菜单里可以用滑动条调。默认 40")]
+    public int TwoColorSpread { get; init; } = 40;
 
     [Description("流动速度（毫秒）：流动灯效转一整圈要多久。数值越小转得越快。默认 2000。范围 500～20000")]
     public int FlowCycleMs { get; init; } = 2000;
 
-    [Description("流动图案每几颗灯重复一次。底部、侧面风扇是 8 颗灯，后置风扇 16 颗；默认 8，每个风扇正好一整圈。范围 2～64")]
+    [Description("双色、流动图案每几颗灯重复一次。底部、侧面风扇是 8 颗灯，后置风扇 16 颗；默认 8，每个风扇正好一整圈。范围 2～64")]
     public int FlowPeriodLeds { get; init; } = 8;
 
     [Description("机箱灯的灯珠数：发颜色时发给多少颗灯。数多了没关系，数少了后面的灯不会变色。默认 256（主板接口的上限）。范围 1～256")]
@@ -173,6 +176,7 @@ internal sealed record AppConfig
             RadiatorLedCount = InRange(nameof(RadiatorLedCount), RadiatorLedCount, 1, MotherboardLightProtocol.MaxLedsPerZone, defaults.RadiatorLedCount, notes),
             FlowCycleMs = InRange(nameof(FlowCycleMs), FlowCycleMs, 500, 20_000, defaults.FlowCycleMs, notes),
             FlowPeriodLeds = InRange(nameof(FlowPeriodLeds), FlowPeriodLeds, 2, 64, defaults.FlowPeriodLeds, notes),
+            TwoColorSpread = InRange(nameof(TwoColorSpread), TwoColorSpread, 0, 100, defaults.TwoColorSpread, notes),
         };
     }
 

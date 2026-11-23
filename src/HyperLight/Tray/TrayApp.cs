@@ -10,7 +10,8 @@ namespace HyperLight.Tray;
 /// <summary>
 /// 托盘程序（M4）：屏幕右下角一个小圆点图标，上下两半显示当前的上、下两个颜色。
 /// 右键菜单：状态（麦克风、主板）、暂停 / 恢复、增强颜色、取色方式、
-/// 麦克风 / 机箱灯 / 冷排灯的开关，机箱灯和冷排灯的取色和灯效、开机自启、打开设置文件、重新读取设置、退出。
+/// 麦克风 / 机箱灯 / 冷排灯的开关，机箱灯和冷排灯的取色和灯效、加大差异（滑动条）、
+/// 开机自启、打开设置文件、重新读取设置、退出。
 /// </summary>
 /// <remarks>
 /// 界面只在主线程（界面线程）里操作。同步工作在 <see cref="SyncEngine"/> 自己的线程里进行，
@@ -20,6 +21,9 @@ namespace HyperLight.Tray;
 internal sealed class TrayApp : ApplicationContext
 {
     private const int refreshIntervalMs = 500;
+
+    /// <summary>拖动"加大差异"滑动条停下多久后才生效（拖动过程中不反复重启同步）。</summary>
+    private const int spreadApplyDelayMs = 400;
     private const int balloonTimeoutMs = 5000;
 
     /// <summary>托盘图标的提示文字最多 127 个字符（Windows 的限制）。</summary>
@@ -44,6 +48,9 @@ internal sealed class TrayApp : ApplicationContext
     private readonly Dictionary<ColorSource, ToolStripMenuItem> radiatorSourceItems = new();
     private readonly Dictionary<LightEffect, ToolStripMenuItem> caseEffectItems = new();
     private readonly Dictionary<LightEffect, ToolStripMenuItem> radiatorEffectItems = new();
+    private readonly ToolStripMenuItem spreadLabel;
+    private readonly TrackBar spreadSlider;
+    private readonly System.Windows.Forms.Timer spreadApplyTimer;
     private readonly ToolStripMenuItem autoStartItem;
     private readonly System.Windows.Forms.Timer refreshTimer;
 
@@ -56,6 +63,9 @@ internal sealed class TrayApp : ApplicationContext
 
     /// <summary>刚点的是开关或多选一的选项：这次点击后菜单不要关，方便连续改好几个。</summary>
     private bool keepMenuOpen;
+
+    /// <summary>程序自己在设置滑动条的位置（不是用户拖的），这时不要当成修改。</summary>
+    private bool updatingSlider;
     private bool exiting;
     private bool disposed;
 
@@ -115,6 +125,22 @@ internal sealed class TrayApp : ApplicationContext
         ToolStripMenuItem radiatorEffectMenu = BuildChoiceMenu(
             "冷排灯灯效", LightEffectRules.All, LightEffectRules.TextOf, radiatorEffectItems,
             effect => config.RadiatorEffect != effect, effect => config with { RadiatorEffect = effect });
+        spreadLabel = new ToolStripMenuItem("加大差异") { Enabled = false };
+        spreadSlider = new TrackBar
+        {
+            Minimum = 0,
+            Maximum = 100,
+            TickFrequency = 10,
+            SmallChange = 5,
+            LargeChange = 10,
+            AutoSize = false,
+            Width = 220,
+            Height = 32,
+        };
+        spreadSlider.ValueChanged += (_, _) => OnSpreadSliderChanged();
+        var spreadSliderHost = new ToolStripControlHost(spreadSlider) { AutoSize = false, Width = 230, Height = 34 };
+        spreadApplyTimer = new System.Windows.Forms.Timer { Interval = spreadApplyDelayMs };
+        spreadApplyTimer.Tick += (_, _) => ApplySpreadFromSlider();
         autoStartItem = new ToolStripMenuItem("开机自启", null, KeepOpen(ToggleAutoStart));
 
         menu = new ContextMenuStrip();
@@ -134,6 +160,8 @@ internal sealed class TrayApp : ApplicationContext
             radiatorItem,
             radiatorSourceMenu,
             radiatorEffectMenu,
+            spreadLabel,
+            spreadSliderHost,
             new ToolStripSeparator(),
             autoStartItem,
             new ToolStripMenuItem("打开设置文件", null, (_, _) => OpenConfigFile()),
@@ -263,7 +291,12 @@ internal sealed class TrayApp : ApplicationContext
         CheckOnly(caseEffectItems, config.CaseEffect);
         CheckOnly(radiatorEffectItems, config.RadiatorEffect);
 
-        // 流动灯效用的是固定的两块区域，取色只在单色时有用：不用时变灰，免得以为点了没反应
+        updatingSlider = true;
+        spreadSlider.Value = config.TwoColorSpread;
+        updatingSlider = false;
+        spreadLabel.Text = SpreadText(config.TwoColorSpread);
+
+        // 双色、流动灯效用的是固定的两块区域，取色只在单色时有用：不用时变灰，免得以为点了没反应
         caseSourceMenu.Enabled = config.CaseEffect == LightEffect.Solid;
         radiatorSourceMenu.Enabled = config.RadiatorEffect == LightEffect.Solid;
 
@@ -332,6 +365,34 @@ internal sealed class TrayApp : ApplicationContext
             }
         }
     }
+
+    /// <summary>拖动滑动条时：马上更新文字，停下一会儿再生效（拖动过程中不反复重启同步）。</summary>
+    private void OnSpreadSliderChanged()
+    {
+        if (updatingSlider)
+        {
+            return;
+        }
+
+        spreadLabel.Text = SpreadText(spreadSlider.Value);
+        spreadApplyTimer.Stop();
+        spreadApplyTimer.Start();
+    }
+
+    private void ApplySpreadFromSlider()
+    {
+        spreadApplyTimer.Stop();
+        if (spreadSlider.Value != config.TwoColorSpread)
+        {
+            ApplyConfig(config with { TwoColorSpread = spreadSlider.Value });
+        }
+    }
+
+    /// <summary>滑动条上面那行说明文字。</summary>
+    private static string SpreadText(int spread) =>
+        spread == 0
+            ? "加大差异：关闭（往右拖打开，双色、流动时用）"
+            : $"加大差异：{spread}（拖到最左边关闭，双色、流动时用）";
 
     /// <summary>"多选一"菜单里只勾选当前的那一项。</summary>
     private static void CheckOnly<T>(Dictionary<T, ToolStripMenuItem> items, T current)
@@ -454,6 +515,7 @@ internal sealed class TrayApp : ApplicationContext
         {
             exiting = true;
             refreshTimer.Stop();
+            spreadApplyTimer.Stop();
             engine.Dispose();
             notifyIcon.Visible = false;
         }
@@ -467,6 +529,7 @@ internal sealed class TrayApp : ApplicationContext
         {
             disposed = true;
             refreshTimer.Dispose();
+            spreadApplyTimer.Dispose();
             engine.Dispose();
             notifyIcon.Dispose();
             menu.Dispose();

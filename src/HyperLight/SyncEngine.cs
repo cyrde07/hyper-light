@@ -60,8 +60,8 @@ internal sealed record SyncStatus
 ///             每块区域交给自己的 <see cref="ColorChangeFilter"/>。麦克风按取色方式用其中两块，主板灯按取色来源或灯效用。
 ///   发送线程：每隔 SendIntervalMs 把"此刻应该显示的颜色"发给麦克风。
 ///             麦克风一停止接收就会恢复自带灯效，所以这个线程不能被截图卡住，两件事必须分开。
-///   主板线程：单色灯效只在颜色变了时才发给主板（M5-1 实测主板停止接收后会保持颜色，不用一直发）；
-///             流动灯效要一直发（每秒约 20 次），图案才会转。
+///   主板线程：单色、双色灯效只在颜色变了时才发给主板（M5-1 实测主板停止接收后会保持颜色，不用一直发）；
+///             流动灯效要一直发（每秒约 20 次），图案才会转。双色、流动的两个颜色太像时，先"加大差异"。
 ///             主板每次要发很多个包（比麦克风慢），单独一个线程，不会拖慢麦克风。
 /// 找不到壁纸超过 WallpaperLostGraceMs，或者暂停时，麦克风停止发送、回到自带灯效；主板灯保持最后的颜色。
 /// sync 命令和托盘程序都使用它。
@@ -503,13 +503,13 @@ internal sealed class SyncEngine : IDisposable
             return;
         }
 
-        // 有流动灯效时要一直发，按流动的帧率走；全是单色时只是看看颜色有没有变，按发送间隔走
-        bool anyFlow = zones.Any(zone => zone.Effect != LightEffect.Solid);
-        TimeSpan interval = anyFlow ? flowFrameInterval : TimeSpan.FromMilliseconds(config.SendIntervalMs);
+        // 有流动灯效时要一直发，按流动的帧率走；全是不动的灯效时只是看看颜色有没有变，按发送间隔走
+        bool anyAnimated = zones.Any(zone => LightEffectRules.IsAnimated(zone.Effect));
+        TimeSpan interval = anyAnimated ? flowFrameInterval : TimeSpan.FromMilliseconds(config.SendIntervalMs);
         using var board = new MotherboardLight();
 
-        // 单色灯区最后一次成功发出的颜色。颜色没变就不发；连接出问题时清空，重新连上后全部重发
-        var lastSent = new Dictionary<MotherboardLightZone, Rgb>();
+        // 不动的灯区最后一次成功发出的两个颜色（单色时两个相同）。颜色没变就不发；连接出问题时清空，重新连上后全部重发
+        var lastSent = new Dictionary<MotherboardLightZone, (Rgb, Rgb)>();
 
         while (!stopping.IsCancellationRequested)
         {
@@ -529,7 +529,7 @@ internal sealed class SyncEngine : IDisposable
         }
     }
 
-    private void SendBoardOnce(MotherboardLight board, List<BoardZoneSetting> zones, Dictionary<MotherboardLightZone, Rgb> lastSent)
+    private void SendBoardOnce(MotherboardLight board, List<BoardZoneSetting> zones, Dictionary<MotherboardLightZone, (Rgb, Rgb)> lastSent)
     {
         if (paused)
         {
@@ -547,7 +547,7 @@ internal sealed class SyncEngine : IDisposable
         SendResult result = SendResult.Sent;
         foreach (BoardZoneSetting setting in zones)
         {
-            Rgb[]? leds = BuildBoardLeds(setting, now, lastSent);
+            Rgb[]? leds = BuildBoardLeds(setting, now, lastSent, out (Rgb, Rgb)? staticColors);
             if (leds is null)
             {
                 continue;
@@ -568,9 +568,9 @@ internal sealed class SyncEngine : IDisposable
                 break;
             }
 
-            if (setting.Effect == LightEffect.Solid)
+            if (staticColors is (Rgb, Rgb) sentColors)
             {
-                lastSent[setting.Zone] = leds[0];
+                lastSent[setting.Zone] = sentColors;
             }
         }
 
@@ -600,28 +600,49 @@ internal sealed class SyncEngine : IDisposable
 
     /// <summary>
     /// 生成一个灯区这一帧要发的所有灯的颜色。不需要发时返回 null：
-    /// 单色而且颜色和上次发的一样；或者要用的区域暂时还没有颜色（截图线程正好在设置过滤器）。
+    /// 不动的灯效（单色、双色）而且颜色和上次发的一样；或者要用的区域暂时还没有颜色（截图线程正好在设置过滤器）。
+    /// <paramref name="staticColors"/>：不动的灯效这次用的两个颜色（单色时两个相同），发送成功后记下来；会动的灯效为 null。
     /// </summary>
-    private Rgb[]? BuildBoardLeds(BoardZoneSetting setting, TimeSpan now, Dictionary<MotherboardLightZone, Rgb> lastSent)
+    private Rgb[]? BuildBoardLeds(
+        BoardZoneSetting setting, TimeSpan now, Dictionary<MotherboardLightZone, (Rgb, Rgb)> lastSent, out (Rgb, Rgb)? staticColors)
     {
-        if (LightEffectRules.FlowRegionsOf(setting.Effect) is (ColorSource firstRegion, ColorSource secondRegion))
+        staticColors = null;
+        Rgb[] leds;
+        (Rgb, Rgb) colors;
+        if (LightEffectRules.TwoColorRegionsOf(setting.Effect) is (ColorSource firstRegion, ColorSource secondRegion))
         {
             if (CurrentOf(firstRegion, now) is not Rgb first || CurrentOf(secondRegion, now) is not Rgb second)
             {
                 return null;
             }
 
-            double cyclePosition = now.TotalMilliseconds / config.FlowCycleMs;
-            return LightEffectRules.BuildFlow(first, second, setting.LedCount, config.FlowPeriodLeds, cyclePosition);
+            colors = ColorEnhancer.Separate(first, second, config.TwoColorSpread);
+            if (LightEffectRules.IsAnimated(setting.Effect))
+            {
+                double cyclePosition = now.TotalMilliseconds / config.FlowCycleMs;
+                return LightEffectRules.BuildFlow(colors.Item1, colors.Item2, setting.LedCount, config.FlowPeriodLeds, cyclePosition);
+            }
+
+            leds = LightEffectRules.BuildSplit(colors.Item1, colors.Item2, setting.LedCount, config.FlowPeriodLeds);
+        }
+        else
+        {
+            if (CurrentOf(setting.Source, now) is not Rgb color)
+            {
+                return null;
+            }
+
+            colors = (color, color);
+            leds = Enumerable.Repeat(color, setting.LedCount).ToArray();
         }
 
-        if (CurrentOf(setting.Source, now) is not Rgb color
-            || (lastSent.TryGetValue(setting.Zone, out Rgb sent) && sent == color))
+        if (lastSent.TryGetValue(setting.Zone, out (Rgb, Rgb) sent) && sent == colors)
         {
             return null;
         }
 
-        return Enumerable.Repeat(color, setting.LedCount).ToArray();
+        staticColors = colors;
+        return leds;
     }
 
     // ───────────────────────── 小工具 ─────────────────────────

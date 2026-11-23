@@ -9,6 +9,12 @@ internal enum LightEffect
     /// <summary>单色：整个灯区一个颜色（按取色来源）。</summary>
     Solid,
 
+    /// <summary>左右双色：每个风扇一半左半区颜色、一半右半区颜色，不转。</summary>
+    SplitLeftRight,
+
+    /// <summary>上下双色：每个风扇一半上半区颜色、一半下半区颜色，不转。</summary>
+    SplitUpDown,
+
     /// <summary>左右流动：左半区和右半区两个颜色连成渐变，在每个风扇上转圈。</summary>
     FlowLeftRight,
 
@@ -16,27 +22,58 @@ internal enum LightEffect
     FlowUpDown,
 }
 
-/// <summary>灯效的中文名字、用到的颜色，以及流动图案的算法。</summary>
+/// <summary>灯效的中文名字、用到的颜色，以及双色、流动图案的算法。</summary>
 internal static class LightEffectRules
 {
     /// <summary>所有灯效，按菜单里的顺序。</summary>
-    public static readonly LightEffect[] All = { LightEffect.Solid, LightEffect.FlowLeftRight, LightEffect.FlowUpDown };
+    public static readonly LightEffect[] All =
+    {
+        LightEffect.Solid,
+        LightEffect.SplitLeftRight,
+        LightEffect.SplitUpDown,
+        LightEffect.FlowLeftRight,
+        LightEffect.FlowUpDown,
+    };
 
     /// <summary>中文名字。</summary>
     public static string TextOf(LightEffect effect) => effect switch
     {
+        LightEffect.SplitLeftRight => "左右双色",
+        LightEffect.SplitUpDown => "上下双色",
         LightEffect.FlowLeftRight => "左右流动",
         LightEffect.FlowUpDown => "上下流动",
         _ => "单色",
     };
 
-    /// <summary>流动灯效用哪两块区域的颜色。单色返回 null（单色用取色来源）。</summary>
-    public static (ColorSource First, ColorSource Second)? FlowRegionsOf(LightEffect effect) => effect switch
+    /// <summary>双色、流动灯效用哪两块区域的颜色。单色返回 null（单色用取色来源）。</summary>
+    public static (ColorSource First, ColorSource Second)? TwoColorRegionsOf(LightEffect effect) => effect switch
     {
-        LightEffect.FlowLeftRight => (ColorSource.Left, ColorSource.Right),
-        LightEffect.FlowUpDown => (ColorSource.Upper, ColorSource.Lower),
+        LightEffect.SplitLeftRight or LightEffect.FlowLeftRight => (ColorSource.Left, ColorSource.Right),
+        LightEffect.SplitUpDown or LightEffect.FlowUpDown => (ColorSource.Upper, ColorSource.Lower),
         _ => null,
     };
+
+    /// <summary>是不是会动的灯效（要一直发数据）。不动的灯效只在颜色变化时发。</summary>
+    public static bool IsAnimated(LightEffect effect) =>
+        effect is LightEffect.FlowLeftRight or LightEffect.FlowUpDown;
+
+    /// <summary>
+    /// 生成双色图案：每 <paramref name="periodLeds"/> 颗灯里，前一半是第一个颜色，后一半是第二个颜色。
+    /// 周期取风扇的灯珠数（8 颗）时，每个风扇正好一半一个颜色。
+    /// </summary>
+    public static Rgb[] BuildSplit(Rgb first, Rgb second, int ledCount, int periodLeds)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(ledCount);
+        ArgumentOutOfRangeException.ThrowIfLessThan(periodLeds, 2);
+
+        var leds = new Rgb[ledCount];
+        for (int i = 0; i < ledCount; i++)
+        {
+            leds[i] = i % periodLeds < periodLeds / 2 ? first : second;
+        }
+
+        return leds;
+    }
 
     /// <summary>
     /// 生成流动图案：两个颜色连成"第一个 → 第二个 → 第一个"的渐变，每 <paramref name="periodLeds"/> 颗灯重复一次，

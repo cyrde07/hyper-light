@@ -112,7 +112,8 @@ internal static class SyncCommand
         Console.WriteLine(
             $"麦克风：{(config.MicEnabled ? "开" : "关")}    "
             + $"机箱灯：{SyncEngine.DescribeBoardZone(config.CaseEnabled, config.CaseColorSource, config.CaseEffect)}    "
-            + $"冷排灯：{SyncEngine.DescribeBoardZone(config.RadiatorEnabled, config.RadiatorColorSource, config.RadiatorEffect)}");
+            + $"冷排灯：{SyncEngine.DescribeBoardZone(config.RadiatorEnabled, config.RadiatorColorSource, config.RadiatorEffect)}    "
+            + $"加大差异：{(config.TwoColorSpread == 0 ? "关" : config.TwoColorSpread.ToString())}");
         Console.WriteLine($"配置文件：{AppConfig.DefaultPath}");
         foreach (string note in notes)
         {
