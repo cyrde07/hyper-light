@@ -1,13 +1,15 @@
 ﻿# hyper-light
 
-把屏幕颜色同步到 HyperX QuadCast S 麦克风的 RGB 灯，让麦克风和 Wallpaper Engine 控制的 Razer 设备（键盘、鼠标垫、音响）颜色保持一致。
+把壁纸颜色同步到 HyperX QuadCast S 麦克风和技嘉主板上的灯（机箱风扇、水冷、主板 AORUS 字），让它们和 Wallpaper Engine 控制的 Razer 设备（键盘、鼠标垫、音响）颜色保持一致。也可以不跟壁纸，自己给每个设备选固定颜色。
 
 - 平台：Windows 10 / 11（64 位）
 - 语言：C#（.NET 8）
 - 设备通信：[HidSharp](https://www.nuget.org/packages/HidSharp)（Apache-2.0 许可）
 - 托盘界面、截图存图：Windows 自带的 WinForms 和 System.Drawing（.NET 官方组件）
-- 协议参考：[QuadcastRGB](https://github.com/Ors1mer/QuadcastRGB)（GPL-2.0 许可）。只参考协议格式和设备编号这类事实，没有使用它的代码。
-- 不修改 Razer、Wallpaper Engine 的任何文件，不做 DLL 劫持。
+- 协议参考（只参考协议格式和设备编号这类事实，没有使用它们的代码）：
+  - 麦克风：[QuadcastRGB](https://github.com/Ors1mer/QuadcastRGB)（GPL-2.0 许可）
+  - 主板灯光芯片：[OpenRGB](https://gitlab.com/CalcProgrammer1/OpenRGB)（GPL-2.0 许可）的 GigabyteRGBFusion2USBController
+- 不修改 Razer、Wallpaper Engine 的任何文件，不做 DLL 劫持；不往主板灯光芯片里永久保存任何东西（断电重启后主板恢复原样）。
 
 ## 进度
 
@@ -15,180 +17,229 @@
 |---|---|---|
 | M0 | 列出 HID 设备，确认 QuadCast S 的 VID / PID | 完成：03F0:028C，接口 0 是灯光控制节点 |
 | M1 | 发一个固定颜色给麦克风，确认能控制 | 完成：每秒 30 帧稳定；停止发送后麦克风立刻恢复自带灯效 |
-| M2 | 截 Wallpaper Engine 的壁纸窗口取色，实时发给麦克风 | 完成：开着软件也和键盘一致；CPU 0.1%；省内存优化后约 20 MB（2026-11-20 实测） |
+| M2 | 截 Wallpaper Engine 的壁纸窗口取色，实时发给麦克风 | 完成：开着软件也和键盘一致；CPU 0.1%；省内存优化后约 20 MB |
 | M3 | 调色：提高饱和度接近键盘颜色；上下两个灯区分别取色 | 完成 |
-| M4 | 托盘程序：开机自启（和其他设备一起亮）、暂停 / 恢复、退出时灯恢复正常 | 完成（2026-11-20 验收通过） |
+| M4 | 托盘程序：开机自启、暂停 / 恢复、退出时灯恢复正常 | 完成 |
+| M5 | 主板灯：机箱灯、冷排灯、主板灯（AORUS 字）跟着壁纸变色；左右半区取色；双色、流动灯效；加大差异 | 完成（2026-11-23） |
+| M6 | 自由选色：每个设备各选各的固定颜色，不截图 | 完成（2026-11-23） |
+
+## 支持的设备
+
+| 设备 | 托盘里叫 | 接在哪 | 能做什么 |
+|---|---|---|---|
+| HyperX QuadCast S | 麦克风 | USB | 上下两个灯区，按「取色方式」取两个颜色 |
+| 机箱风扇和灯条 | 机箱灯 | 机箱集线板 → 主板 `ARGB_V2_1`（协议通道 0x59） | 单色 / 双色 / 流动 |
+| 瓦尔基里 V360 水冷 | 冷排灯 | 主板 `ARGB_V2_2`（协议通道 0x58） | 单色 / 双色 / 流动 |
+| 主板 AORUS 字 | 主板灯 | 主板自带（技嘉 X670E AORUS PRO X，灯光芯片 ITE IT5702，048D:5702） | 单色 |
+
+内存条、显卡的灯不控制（内存条要装驱动、用管理员权限，有风险；显卡以后再评估）。
 
 ## 使用
 
-### 平时使用：托盘程序（M4）
+### 平时使用：托盘程序
 
 双击 `HyperLight.exe`，程序会在屏幕右下角的托盘区运行，**不会弹出窗口**。
 
-- **托盘图标**：一个小圆点，上半部分是上灯区的颜色，下半部分是下灯区的颜色；暂停时是灰色；还没有颜色（比如没找到壁纸）时是空心圆。
-- **右键菜单**：
+- **托盘图标**：一个小圆点，上半部分是麦克风上灯区的颜色，下半部分是下灯区的颜色；暂停时是灰色；还没有颜色（比如没找到壁纸）时是空心圆。
+- **右键菜单**：点开关和多选一的选项时菜单**不会关闭**，可以连续改好几个；点菜单外面就关闭。所有改动都会自动保存到设置文件。
 
 | 菜单项 | 作用 |
 |---|---|
-| 第一行（灰色） | 当前状态，比如"同步中：上 001E6C / 下 1A2B3C" |
-| 暂停同步 / 恢复同步 | 暂停时不截图、不发送，麦克风回到自带灯效 |
-| 增强颜色（模仿 Wallpaper Engine） | 打开 / 关闭饱和度增强（M3），会保存到设置文件 |
-| 取色方式 | 三选一：上下（上半张 → 上灯区，下半张 → 下灯区）/ 左右（左半张 → 上灯区，右半张 → 下灯区）/ 整张壁纸（两个灯区同色）。会保存到设置文件 |
-| 开机自启 | 勾选后，以后开机自动在托盘运行（写入当前用户的启动项，不需要管理员权限）。只有你勾选才会打开 |
+| 第一行（灰色） | 麦克风和壁纸的状态，比如"同步中：上 001E6C / 下 1A2B3C" |
+| 第二行（灰色） | 主板的状态，比如"主板：主板已连接，主板上的灯正在同步" |
+| 暂停同步 / 恢复同步 | 暂停时不截图、不发送：麦克风回到自带灯效，主板上的灯保持当前颜色 |
+| 模式 | 跟壁纸 / 自由选色 |
+| 自由选色 | 给每个设备选颜色（弹出 Windows 选色窗口），前面的小色块是现在的颜色。机箱灯、冷排灯各有两个颜色：单色用第一个，双色、流动用两个 |
+| 增强颜色（模仿 Wallpaper Engine） | 提高饱和度。自由选色时变灰 |
+| 取色方式 | 麦克风两个灯区从壁纸哪里取色：上下 / 左右 / 整张。自由选色时变灰 |
+| 麦克风 / 机箱灯 / 冷排灯 / 主板灯 | 每个设备的开关。关掉后：麦克风回到自带灯效；主板上的灯停在最后的颜色 |
+| 机箱灯取色 / 冷排灯取色 / 主板灯取色 | 单色时用壁纸哪一块：上半区 / 下半区 / 左半区 / 右半区 / 整张 |
+| 机箱灯灯效 / 冷排灯灯效 | 单色 / 左右双色 / 上下双色 / 左右流动 / 上下流动 |
+| 加大差异（滑动条） | 双色、流动时，两个颜色太像就自动拉开（有颜色的往色环两边挪，灰色变成一亮一暗）。拖到最左边关闭，停下 0.4 秒后生效 |
+| 开机自启 | 勾选后，以后开机自动在托盘运行（写入当前用户的启动项，不需要管理员权限） |
 | 打开设置文件 | 用记事本打开 `hyperlight.json` |
 | 重新读取设置 | 改完设置文件后点这里生效 |
-| 退出 | 停止同步，麦克风马上回到自带灯效 |
+| 退出 | 停止同步：麦克风马上回到自带灯效，主板上的灯保持最后的颜色 |
 
-- **防止重复运行**：同一时间只允许一个 HyperLight 控制麦克风。托盘程序在运行时，再双击 exe 只会提示"已经在运行"；`sync`、`color` 命令也会提示先退出托盘。
+- **防止重复运行**：同一时间只允许一个 HyperLight 运行。托盘程序在运行时，再双击 exe 只会提示"已经在运行"。
 - **exe 换了位置**（比如解压了新版本）：打开过开机自启的话，新位置的程序启动时会自动把启动项改成新位置。
 - **桌面快捷方式**：右键 `HyperLight.exe` →（Windows 11 先点「显示更多选项」）「发送到」→「桌面快捷方式」。
-- **建议放在固定位置**：比如 `D:\Tools\HyperLight`，不要放在「下载」文件夹里，免得被误删后开机自启找不到程序。
+- **建议放在固定位置**：比如 `D:\Tools\HyperLight`，不要放在「下载」文件夹里。
 
-### 诊断工具
+### 灯效说明
 
-带命令运行时是诊断工具。因为 `HyperLight.exe` 是窗口程序，请通过 `.bat` 文件运行（`.bat` 要和 exe 放在同一个文件夹）。
-直接在命令行里敲命令也可以，但命令行不会等程序结束，输出会和提示符混在一起，这时可以用 `start /wait HyperLight.exe list`。
+| 灯效 | 样子 | 用到的颜色 |
+|---|---|---|
+| 单色 | 整个灯区一个颜色 | 「取色」选的那一块 |
+| 左右双色 / 上下双色 | 每个风扇一半一个颜色，不转 | 左半区 + 右半区 / 上半区 + 下半区 |
+| 左右流动 / 上下流动 | 两个颜色连成渐变，在每个风扇上转圈（默认 2 秒一圈） | 同上 |
 
-### 设备诊断（M0）
+- 机箱集线板会把同一份数据**复制**给每个风扇，所以 5 个风扇永远显示同样的图案，没法各是各的颜色。
+- 双色、流动的图案每 8 颗灯重复一次（底部、侧面风扇 8 颗灯正好一圈；后置风扇 16 颗是两圈）。
+- 壁纸两边颜色差不多时（比如上粉下蓝的壁纸，左右两半都是"粉蓝混合"），左右流动会看不出来，要用上下流动，或者把「加大差异」调大。
+- 单色、双色只在颜色变化时才发给主板（主板停止接收后会保持颜色）；流动每秒发约 20 帧。
 
-1. 运行 `manual-tests/m0/list.bat`（等于执行 `HyperLight.exe list`）。
-2. 窗口里会列出所有 HID 设备，QuadCast S 候选用 ★ 标出，灯光控制节点后面有"← 灯光控制节点"。
-3. 同样的内容会存成 exe 旁边的 `hid-list-日期-时间.txt`。
+## 主板灯的接线和设置（重要）
 
-诊断只读取信息，不向麦克风发送数据。
-
-### 固定颜色测试（M1）
-
-```
-HyperLight.exe color <上灯区颜色> [下灯区颜色] [--interval 毫秒] [--seconds 秒数]
-```
-
-`manual-tests/m1/` 里有 4 个测试脚本，打包时和 exe 放在一起，双击即可：
-
-| 脚本 | 内容 |
-|---|---|
-| `test1-red.bat` | 纯红 15 秒。停止后观察灯怎么变化 |
-| `test2-upper-red-lower-blue.bat` | 上灯区红、下灯区蓝 15 秒 |
-| `test3-30fps.bat` | 纯绿，每秒约 30 帧（间隔 33 毫秒），15 秒 |
-| `test4-unplug.bat` | 紫色 60 秒。中途拔掉麦克风再插回去，看能否自动恢复 |
-
-脚本里只写英文：Windows 命令行默认按 GBK 读取 .bat，写 UTF-8 中文可能导致命令错乱。
-
-### 壁纸同步（M2，命令行版）
+M5 实测的接线（2026-11-23）：
 
 ```
-HyperLight.exe sync
+主板 ARGB_V2_2（右上，LED_C 正下方） ── 水冷的灯光线
+主板 ARGB_V2_1（左下，前置音频旁边） ── 机箱集线板的输入线（一根母头灯光线，原来空着）
+机箱集线板 ── 底部 3 个风扇 / 侧面风扇 / 后置风扇 + 灯条
+CPU_FAN ── 水冷转速；SYS_FAN4 ── 后置风扇转速
 ```
 
-和托盘程序用的是同一个同步引擎，只是把状态显示在命令行窗口里（颜色色块、截图耗时、帧率、CPU、内存），方便排查问题。
-按 Ctrl+C 停止。测试脚本：`manual-tests/m2/sync.bat`。
+- **机箱灯光按钮**：长按会在「集线板自己的灯效 → 关闭 → 主板控制」之间轮流切换。**要停在「主板控制」**，机箱灯才会听 HyperLight 的。断电重启后集线板可能会变回自己的灯效，再长按切回来就行。
+- **OpenRGB、技嘉 GCC / RGB Fusion 要关掉**：它们也会控制主板灯光芯片，和 HyperLight 抢。HyperLight 检测到 OpenRGB 在运行会弹提醒。
+- **灯珠数**：建议在设置文件里把 `caseLedCount`、`radiatorLedCount` 改成 64。每个包大约 3 毫秒，256 颗灯一帧要 28 个包（约 90 毫秒），流动会卡；64 颗只要 8 个包（约 25 毫秒）。
+- **已知硬件问题**：水冷侧面灯条三分之一处有一颗灯珠接触不良，中间那个风扇偶尔会闪，后面的灯常常收不到数据（`board range` 测试：第 1～64 颗之后全黑）。软件修不了，可以找售后。
+- **ARGB_V2_1 和 ARGB_V2_3 是同一个通道**（OpenRGB 资料），所以主板只有两个能分开控制的 ARGB 接口。OpenRGB 里叫 `ARGB_V2_3` 的就是 `ARGB_V2_1`。
 
-- **为什么截壁纸窗口，不截整个屏幕**：实测 Wallpaper Engine 给 Razer 设备的颜色取自壁纸本身，开着软件也不变；截整个屏幕会截到软件。
-- **怎么截**：用 PrintWindow（完整内容模式）截壁纸的宿主窗口，壁纸被窗口挡住也能截到。会带上桌面图标，实测对颜色影响很小。
-- **两个线程**：截图线程每 0.5 秒截一次；发送线程每 33 毫秒发一次。麦克风一停止接收就恢复自带灯效，所以发送不能被截图卡住。
-- **不闪眼睛**：颜色变化小于门槛就当没变；真的变了就渐变过去。
-- **增强颜色（M3）**：平均色通常偏灰，按 Wallpaper Engine 的做法提高饱和度（色调和亮度不变）。
-- **取色方式（M3）**：麦克风硬件只有上、下两个灯区，但可以选从壁纸的哪里取颜色：上下、左右或整张。很多壁纸左右颜色差别比上下大（实测一张壁纸：左右差 56，上下差 15），选「左右」两个灯区更容易显示出不同颜色。
-- **找不到壁纸**（Wallpaper Engine 没开）：3 秒后停止发送，麦克风回到自带灯效；Wallpaper Engine 再打开，自动恢复。
+## 设置文件
 
-设置保存在 exe 旁边的 `hyperlight.json`，第一次运行时自动生成，每一项上面都有中文说明。改完重新启动程序生效。
+设置保存在 exe 旁边的 `hyperlight.json`，第一次运行时自动生成，每一项上面都有中文说明。托盘菜单里的改动也会写进这个文件。手动改完后，在托盘菜单点「重新读取设置」生效。
 
 | 配置项 | 默认值 | 含义 |
 |---|---|---|
-| `captureIntervalMs` | 500 | 截图间隔（毫秒） |
-| `sendIntervalMs` | 33 | 发送间隔（毫秒），范围 20～100 |
+| `captureIntervalMs` | 500 | 截图间隔（毫秒），范围 100～10000。改成 250，换壁纸时反应快一倍 |
+| `sendIntervalMs` | 33 | 麦克风发送间隔（毫秒），范围 20～100 |
 | `changeThreshold` | 12 | 颜色变化门槛（0～255），越大越不容易变 |
 | `fadeMs` | 400 | 渐变时间（毫秒），0 表示立刻切换 |
-| `confirmCaptures` | 2 | 确认次数：新颜色要连续截到几次才切换，换壁纸时一闪而过的过渡画面就不会传到麦克风。1 表示截到就换 |
-| `wallpaperLostGraceMs` | 3000 | 找不到壁纸多久后停止发送（毫秒） |
-| `boostColors` | true | 增强颜色：提高饱和度，模仿 Wallpaper Engine 的「增强 LED 颜色」 |
-| `saturationBoost` | 1.5 | 增强倍数，范围 1.0～3.0，越大越鲜艳 |
-| `zoneLayout` | topBottom | 取色方式：`topBottom` 上下 / `leftRight` 左右 / `whole` 整张壁纸 |
+| `confirmCaptures` | 2 | 新颜色要连续截到几次才切换，换壁纸时的过渡画面就不会传到灯上 |
+| `wallpaperLostGraceMs` | 3000 | 找不到壁纸多久后麦克风停止发送（毫秒） |
+| `boostColors` | true | 增强颜色（提高饱和度） |
+| `saturationBoost` | 1.5 | 增强倍数，范围 1.0～3.0 |
+| `zoneLayout` | topBottom | 麦克风取色方式：`topBottom` 上下 / `leftRight` 左右 / `whole` 整张 |
+| `colorMode` | wallpaper | 模式：`wallpaper` 跟壁纸 / `free` 自由选色 |
+| `micEnabled` / `caseEnabled` / `radiatorEnabled` / `onboardEnabled` | true | 四个设备的开关 |
+| `onboardColorSource` | average | 主板灯取色：`upper` / `lower` / `left` / `right` / `average`（整张） |
+| `caseColorSource` | lower | 机箱灯取色（单色时用） |
+| `radiatorColorSource` | upper | 冷排灯取色（单色时用） |
+| `caseEffect` / `radiatorEffect` | solid | 灯效：`solid` 单色 / `splitLeftRight` 左右双色 / `splitUpDown` 上下双色 / `flowLeftRight` 左右流动 / `flowUpDown` 上下流动 |
+| `twoColorSpread` | 40 | 加大差异（0～100），0 关闭 |
+| `flowCycleMs` | 2000 | 流动转一圈多少毫秒，范围 500～20000 |
+| `freeMicColor` 等 6 项 | FF69B4 / 8A2BE2 | 自由选色的颜色，写成 6 位十六进制 |
+| `flowPeriodLeds` | 8 | 双色、流动图案每几颗灯重复一次，范围 2～64 |
+| `caseLedCount` / `radiatorLedCount` | 256 | 发给多少颗灯，范围 1～256（建议改成 64） |
 
-（配置项的默认值和说明以 `src/HyperLight/Config/AppConfig.cs` 为准。）
+（以 `src/HyperLight/Config/AppConfig.cs` 为准。）
 
-### 壁纸窗口截图测试（方案 A）
+## 诊断工具
 
-`manual-tests/m2-probe/probe-wallpaper.bat`（对应 `HyperLight.exe probe`）：找到 Wallpaper Engine 画壁纸的窗口，用几种方法各截两次，
-截图和报告存到 exe 旁边的 `probe-日期-时间` 文件夹。只读，不碰 Wallpaper Engine 的文件、进程和设置。
+带命令运行时是诊断工具。因为 `HyperLight.exe` 是窗口程序，请通过 `.bat` 文件运行（`.bat` 要和 exe 放在同一个文件夹）。
+**运行和主板有关的测试前，先退出托盘里的 HyperLight 和 OpenRGB**，不然会互相抢。
+脚本里只写英文：Windows 命令行默认按 GBK 读取 .bat，写 UTF-8 中文可能导致命令错乱。
 
-## 卡顿记录（排查"灯暗一下、屏幕卡一下"）
+| 命令 | 作用 | 测试脚本 |
+|---|---|---|
+| `list` | 列出所有 HID 设备，找出 QuadCast S，检查 NGENUITY（只读） | `manual-tests/m0/list.bat` |
+| `color <上> [下]` | 给麦克风发固定颜色 | `manual-tests/m1/` |
+| `sync` | 壁纸同步的命令行版，显示色块、耗时、CPU、内存 | `manual-tests/m2/sync.bat` |
+| `probe` | 找 Wallpaper Engine 的壁纸窗口并截图（只读） | `manual-tests/m2-probe/` |
+| `board` | 读取主板灯光芯片的信息（只读），报告存成 `board-info-日期-时间.txt` | `manual-tests/m5/board-info.bat` |
+| `board color <机箱> [冷排]` | 机箱灯、冷排灯设成固定颜色 | `m5/test1`～`test5` |
+| `board count` | 每 4 颗灯一段，按红绿蓝黄青紫循环上色，拍照数灯珠 | `m5/test6` |
+| `board range <从> <到>` | 冷排只点亮这一段灯（白色） | `m5/test7`～`test10` |
+| `board flow <颜色1> <颜色2>` | 机箱灯、冷排灯流动 10 秒，显示每帧发送耗时 | `m5/test11` |
+| `board onboard <颜色> [下方颜色]` | 主板灯（I/O 挡板上、下）设成固定颜色 | `m5/test12`～`test16` |
 
-程序会在出现异常时自动记一行到 exe 旁边的 `hyperlight-log.txt`（平时什么都不写，超过 1 MB 会自动换新文件）：
+### 同步是怎么工作的
+
+- **截壁纸窗口，不截整个屏幕**：实测 Wallpaper Engine 给 Razer 设备的颜色取自壁纸本身，开着软件也不变。
+- **怎么截**：用 PrintWindow（完整内容模式）截壁纸的宿主窗口，壁纸被窗口挡住也能截到。
+- **一次算五块颜色**：把壁纸分成左上、右上、左下、右下四块扫描一遍，组合出上、下、左、右、整张五个颜色。每块各有一个颜色过滤器（变化门槛 + 确认次数 + 渐变）。
+- **三个线程**：截图线程（每 0.5 秒截一次）；麦克风发送线程（每 33 毫秒发一次，麦克风一停止接收就恢复自带灯效，所以不能被截图卡住）；主板线程（单色、双色只在颜色变化时发，流动每秒约 20 帧；单独一个线程，不会拖慢麦克风）。
+- **找不到壁纸**（Wallpaper Engine 没开）：3 秒后麦克风停止发送、回到自带灯效；主板上的灯保持最后的颜色。
+
+## 卡顿记录
+
+程序会在出现异常时自动记一行到 exe 旁边的 `hyperlight-log.txt`（平时只记启动和状态变化，超过 1 MB 会自动换新文件）：
 
 | 记录 | 说明 |
 |---|---|
-| `[截图] 这次截图很慢` | 截一次壁纸超过 0.3 秒。如果卡顿时出现，多半是截图引起的 |
-| `[发送] 发送中断了 N 毫秒` | 发送线程被卡住了，这段时间麦克风会回到自带灯效。记录里会写明是"卡在给麦克风发数据上"（USB 慢）还是"整个程序被卡住"（电脑整体卡了一下） |
+| `[启动]` | 开始同步，写明截图间隔、取色方式和每个设备的设置 |
+| `[截图] 这次截图很慢` | 截一次壁纸超过 0.3 秒 |
+| `[发送] 发送中断了 N 毫秒` | 麦克风发送线程被卡住，会写明是 USB 慢还是整个程序被卡住 |
 | `[壁纸] 壁纸窗口变了 / 找不到壁纸窗口` | Wallpaper Engine 换壁纸、重新加载或者没开 |
-| `[颜色] 颜色突变` | 颜色一下子变了很多，多半是换了壁纸。会写明"已切换"还是"先不切换，等确认"（一闪而过的过渡画面会被忽略） |
-
-已知情况：Wallpaper Engine 的播放列表换壁纸时，屏幕可能会顿一下，所有灯也会闪一下（实测记录里每次换壁纸都有"壁纸窗口变了"）。
-这是 Wallpaper Engine 加载新壁纸造成的，不是 HyperLight 引起的；可以在 Wallpaper Engine 里拉长换壁纸的间隔，或者换掉加载慢的壁纸。
+| `[颜色] 颜色突变` | 颜色一下子变了很多，多半是换了壁纸；写明"已切换"还是"先不切换，等确认" |
 | `[麦克风] 麦克风断开 / 已连上` | USB 断开又连上 |
+| `[主板] 主板灯光芯片已连上 / 断开 / 发颜色很慢` | 主板连接情况；发一次超过 0.3 秒会记录 |
 
-出现卡顿后，看最后几条记录的时间和内容，就能判断那一刻发生了什么；再拿这个时间去 Windows 事件查看器里对照。
+已知情况：Wallpaper Engine 的播放列表换壁纸时，屏幕可能会顿一下，所有灯也会闪一下。这是 Wallpaper Engine 加载新壁纸造成的，不是 HyperLight 引起的；可以拉长换壁纸的间隔，或者换掉加载慢的壁纸。
 
 ## 换电脑 / 重新安装
 
-需要：Windows 10 / 11（64 位）、HyperX QuadCast S、Wallpaper Engine。不用装 .NET，也不用装 iCUE 等其他软件。
+需要：Windows 10 / 11（64 位）、HyperX QuadCast S、Wallpaper Engine。不用装 .NET，也不用装 iCUE、OpenRGB 等其他软件。主板灯的部分只支持技嘉 IT5702 灯光芯片（本项目按 X670E AORUS PRO X 测试）。
 
-1. 把 `HyperLight` 文件夹拷过去（或者从仓库的 Releases 下载解压）。改过设置的话，`hyperlight.json` 要一起拷。
+1. 把 `HyperLight` 文件夹拷过去。改过设置的话，`hyperlight.json` 要一起拷。
 2. 双击 `HyperLight.exe`。
 3. 托盘菜单里重新勾一次「开机自启」（开机自启是记在每台电脑上的）。
+4. 换了主板或机箱接线的话，先跑 `board-info.bat` 和 `m5` 的测试，确认机箱灯、冷排灯没有对调（`test5` 应该是机箱红、冷排蓝）。
 
 找不到麦克风时，运行 `list.bat` 看设备编号。新批次的麦克风如果编号不在 `Device/QuadcastDeviceIds.cs` 的表里，加一行就行。
 多显示器没有测试过，程序默认取主显示器的壁纸。
 
-编译出来的 exe 不放进 git（太大）。需要的话可以自己重新编译（见下面的「编译」），或者把打包好的 zip 放进 GitHub 的 Releases。
+编译出来的 exe 不放进 git（太大）。需要的话可以自己重新编译（见下面的「编译」）。
 
 ## 注意
 
-- 发颜色之前必须完全退出 HyperX NGENUITY（两个程序会同时发数据，灯会乱闪）。程序检测到它在运行时会提示。
+- 发颜色之前必须完全退出 HyperX NGENUITY（两个程序会同时控制麦克风，灯会乱闪）。程序检测到它在运行时会提示。
+- 控制主板灯时必须关掉 OpenRGB 和技嘉的灯光软件，理由同上。
 
 ## 目录结构
 
 ```
 hyper-light/
 ├─ HyperLight.sln
-├─ manual-tests/        手动测试脚本（m0：设备诊断；m1：固定颜色；m2：壁纸同步；m2-probe：壁纸窗口截图测试）
+├─ manual-tests/        手动测试脚本（m0 设备诊断；m1 麦克风固定颜色；m2 壁纸同步；m2-probe 壁纸窗口截图；m5 主板灯）
 └─ src/HyperLight/
    ├─ Program.cs        入口：不带参数启动托盘；带命令时是诊断工具
-   ├─ SyncEngine.cs     同步引擎：截图线程 + 发送线程（托盘和 sync 命令共用）
-   ├─ MicOwnerLock.cs   防止多个 HyperLight 同时控制麦克风
+   ├─ SyncEngine.cs     同步引擎：截图线程 + 麦克风发送线程 + 主板线程（托盘和 sync 命令共用）
+   ├─ MicOwnerLock.cs   防止多个 HyperLight 同时运行
+   ├─ Rgb.cs            颜色类型（各模块共用）
    ├─ Diagnostics/
    │  └─ StallLog.cs           卡顿记录（hyperlight-log.txt）
-   ├─ Rgb.cs            颜色类型（各模块共用）
-   ├─ Tray/             托盘程序（M4）
-   │  ├─ TrayApp.cs            托盘图标、右键菜单、暂停 / 退出
-   │  ├─ TrayIconPainter.cs    画托盘图标（上下两半显示两个灯区的颜色）
-   │  └─ AutoStart.cs          开机自启（当前用户的启动项）
+   ├─ Tray/             托盘程序
+   │  ├─ TrayApp.cs            托盘图标、右键菜单（开关、多选一、选色、滑动条）
+   │  ├─ TrayIconPainter.cs    画托盘图标
+   │  └─ AutoStart.cs          开机自启
    ├─ Commands/         命令
-   │  ├─ ColorCommand.cs       color 命令（M1 固定颜色测试）
-   │  ├─ SyncCommand.cs        sync 命令（M2 壁纸同步）
-   │  └─ ProbeCommand.cs       probe 命令（方案 A 测试）
+   │  ├─ ColorCommand.cs       color 命令（麦克风固定颜色）
+   │  ├─ SyncCommand.cs        sync 命令（壁纸同步命令行版）
+   │  ├─ ProbeCommand.cs       probe 命令（壁纸窗口截图测试）
+   │  ├─ BoardCommand.cs       board 命令（主板灯诊断和测试）
+   │  └─ ReportFile.cs         把诊断报告存到 exe 旁边（list、board 共用）
    ├─ Config/
-   │  └─ AppConfig.cs          配置项、默认值、范围、说明（全项目唯一定义配置的地方）
+   │  ├─ AppConfig.cs          配置项、默认值、范围、说明（全项目唯一定义配置的地方）
+   │  └─ RgbHexConverter.cs    颜色在设置文件里写成 "FF69B4"
    ├─ ColorProcessing/  颜色处理
-   │  ├─ ZoneColors.cs         上下两个灯区的颜色
-   │  ├─ ZoneLayout.cs         取色方式（上下 / 左右 / 整张）和它们的中文名字
-   │  ├─ ColorAverager.cs      算平均色（隔几个像素取一个点；可以分上下两半）
-   │  ├─ ColorEnhancer.cs      增强颜色（提高饱和度）
-   │  └─ ColorChangeFilter.cs  变化门槛 + 渐变
+   │  ├─ WallpaperColors.cs    一次截图算出的五块区域颜色
+   │  ├─ ColorAverager.cs      算平均色（扫描一遍，分四块累加）
+   │  ├─ ColorSource.cs        取色来源（上 / 下 / 左 / 右 / 整张）和中文名字
+   │  ├─ ZoneLayout.cs         麦克风取色方式，以及它用哪两块区域
+   │  ├─ ZoneColors.cs         麦克风上下两个灯区的颜色
+   │  ├─ LightEffect.cs        灯效（单色 / 双色 / 流动）和图案算法
+   │  ├─ ColorMode.cs          模式（跟壁纸 / 自由选色）
+   │  ├─ ColorEnhancer.cs      增强颜色（提高饱和度）、加大差异
+   │  └─ ColorChangeFilter.cs  变化门槛 + 确认次数 + 渐变
    ├─ Capture/          截图
    │  ├─ NativeMethods.cs      Windows 系统函数声明
-   │  ├─ WallpaperWindowFinder.cs  找壁纸窗口（全项目唯一写"哪个窗口是壁纸"的地方）
-   │  ├─ WallpaperCapturer.cs  截壁纸（内存反复使用）
-   │  └─ WallpaperWindowProbe.cs  方案 A 测试：找壁纸窗口、几种方法截图、自动判断
+   │  ├─ WallpaperWindowFinder.cs  找壁纸窗口
+   │  ├─ WallpaperCapturer.cs  截壁纸
+   │  └─ WallpaperWindowProbe.cs  壁纸窗口截图测试
    └─ Device/           设备通信
       ├─ UsbId.cs              USB 设备编号（VID:PID）
-      ├─ QuadcastDeviceIds.cs  麦克风编号表（全项目唯一写设备编号的地方）
-      ├─ QuadcastProtocol.cs   灯光协议：拼数据包（全项目唯一写字节格式的地方）
-      ├─ QuadcastMic.cs        灯光连接：找节点、打开、发颜色、断线重连
-      ├─ NgenuityProcess.cs    检查 NGENUITY 是否在运行（全项目唯一写进程名的地方）
-      └─ HidDiagnostics.cs     设备诊断（M0）
+      ├─ QuadcastDeviceIds.cs  麦克风编号表
+      ├─ QuadcastProtocol.cs   麦克风灯光协议（字节格式）
+      ├─ QuadcastMic.cs        麦克风连接：找节点、打开、发颜色、断线重连
+      ├─ NgenuityProcess.cs    检查 NGENUITY 是否在运行
+      ├─ HidDiagnostics.cs     设备诊断（list 命令）
+      ├─ MotherboardLightProtocol.cs  主板灯光芯片协议：编号、灯区和通道、颜色包、灯效包（全项目唯一写这些的地方）
+      ├─ MotherboardLight.cs   主板连接：读颜色顺序、关自带灯效、发颜色、断线重连
+      ├─ MotherboardLightDiagnostics.cs  主板灯光芯片诊断（board 命令）
+      └─ OpenRgbProcess.cs     检查 OpenRGB 是否在运行
 ```
-
 
 ## 编码规范
 
