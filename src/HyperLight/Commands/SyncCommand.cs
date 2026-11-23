@@ -64,7 +64,7 @@ internal static class SyncCommand
 
             var meter = new ResourceMeter();
             // 第一次比较时让两个状态都显示出来
-            SyncStatus previous = new() { WallpaperState = "", MicState = "", BoardState = "" };
+            SyncStatus previous = new() { WallpaperState = "", MicState = "", BoardState = "", GpuState = "" };
             TimeSpan nextStatus = statusInterval;
             long framesAtLastStatus = 0;
             TimeSpan lastStatusTime = TimeSpan.Zero;
@@ -94,7 +94,7 @@ internal static class SyncCommand
         }
 
         Console.WriteLine();
-        PrintLine(clock, "已停止同步。麦克风会马上回到它自带的灯效，主板上的灯保持最后的颜色。");
+        PrintLine(clock, "已停止同步。麦克风会马上回到它自带的灯效，主板和显卡的灯保持最后的颜色。");
         return 0;
     }
 
@@ -115,7 +115,8 @@ internal static class SyncCommand
             + $"机箱灯：{SyncEngine.DescribeBoardZone(config.CaseEnabled, config.CaseColorSource, config.CaseEffect)}    "
             + $"冷排灯：{SyncEngine.DescribeBoardZone(config.RadiatorEnabled, config.RadiatorColorSource, config.RadiatorEffect)}    "
             + $"加大差异：{(config.TwoColorSpread == 0 ? "关" : config.TwoColorSpread.ToString())}    "
-            + $"主板灯：{SyncEngine.DescribeOnboard(config.OnboardEnabled, config.OnboardColorSource, config.OnboardColorBoost)}");
+            + $"主板灯：{SyncEngine.DescribeSolidLight(config.OnboardEnabled, config.OnboardColorSource, config.OnboardColorBoost)}    "
+            + $"显卡灯：{SyncEngine.DescribeSolidLight(config.GpuEnabled, config.GpuColorSource, config.GpuColorBoost)}");
         Console.WriteLine($"配置文件：{AppConfig.DefaultPath}");
         foreach (string note in notes)
         {
@@ -150,6 +151,11 @@ internal static class SyncCommand
         if (current.BoardState != previous.BoardState)
         {
             PrintLine(clock, $"主板：{current.BoardState}");
+        }
+
+        if (current.GpuState != previous.GpuState)
+        {
+            PrintLine(clock, $"显卡：{current.GpuState}");
         }
 
         if (current.OpenRgbRunning != previous.OpenRgbRunning)

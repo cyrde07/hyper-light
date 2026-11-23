@@ -46,6 +46,12 @@ internal sealed record SyncStatus
     /// <summary>OpenRGB 是否在运行。</summary>
     public bool OpenRgbRunning { get; init; }
 
+    /// <summary>显卡灯这一侧的状态。</summary>
+    public string GpuState { get; init; } = "等待第一次截图…";
+
+    /// <summary>显卡灯有没有连上。</summary>
+    public bool GpuConnected { get; init; }
+
     /// <summary>是否已暂停。</summary>
     public bool Paused { get; init; }
 
@@ -54,8 +60,8 @@ internal sealed record SyncStatus
 }
 
 /// <summary>
-/// 同步引擎：截壁纸 → 算两个灯区的平均色 → 增强颜色 → 变化过滤 → 发给麦克风和主板灯。
-/// 三个线程：
+/// 同步引擎：截壁纸 → 算两个灯区的平均色 → 增强颜色 → 变化过滤 → 发给麦克风、主板灯和显卡灯。
+/// 四个线程：
 ///   截图线程：每隔 CaptureIntervalMs 截一次壁纸，算出上、下、左、右、整张五块区域的颜色，
 ///             每块区域交给自己的 <see cref="ColorChangeFilter"/>。麦克风按取色方式用其中两块，主板灯按取色来源或灯效用。
 ///   发送线程：每隔 SendIntervalMs 把"此刻应该显示的颜色"发给麦克风。
@@ -64,7 +70,9 @@ internal sealed record SyncStatus
 ///             单色、双色灯效只在颜色变了时才发给主板（M5-1 实测主板停止接收后会保持颜色，不用一直发）；
 ///             流动灯效要一直发（每秒约 20 次），图案才会转。双色、流动的两个颜色太像时，先"加大差异"。
 ///             主板每次要发很多个包（比麦克风慢），单独一个线程，不会拖慢麦克风。
-/// 找不到壁纸超过 WallpaperLostGraceMs，或者暂停时，麦克风停止发送、回到自带灯效；主板上的灯保持最后的颜色。
+///   显卡线程：显卡灯（纯色）只在颜色变了时才发。经过 NVIDIA 驱动的 I2C 一次要传二十来次，比主板还慢，
+///             单独一个线程，不会拖慢风扇的流动。连不上时每秒重试一次。
+/// 找不到壁纸超过 WallpaperLostGraceMs，或者暂停时，麦克风停止发送、回到自带灯效；主板和显卡的灯保持最后的颜色。
 /// 自由选色模式：不截图，每个设备直接用设置里选好的固定颜色（不做加大差异，颜色是用户亲手选的）。
 /// sync 命令和托盘程序都使用它。
 /// </summary>
@@ -99,6 +107,7 @@ internal sealed class SyncEngine : IDisposable
     private Thread? captureThread;
     private Thread? sendThread;
     private Thread? boardThread;
+    private Thread? gpuThread;
     private volatile bool paused;
     private bool disposed;
 
@@ -146,7 +155,7 @@ internal sealed class SyncEngine : IDisposable
         }
     }
 
-    /// <summary>启动三个线程。只能调用一次。</summary>
+    /// <summary>启动四个线程。只能调用一次。</summary>
     public void Start()
     {
         ObjectDisposedException.ThrowIf(disposed, this);
@@ -160,6 +169,7 @@ internal sealed class SyncEngine : IDisposable
         captureThread = StartBackgroundThread(CaptureLoop, "HyperLight 截图线程");
         sendThread = StartBackgroundThread(SendLoop, "HyperLight 发送线程");
         boardThread = StartBackgroundThread(BoardLoop, "HyperLight 主板线程");
+        gpuThread = StartBackgroundThread(GpuLoop, "HyperLight 显卡线程");
     }
 
     /// <summary>停止同步。各个线程会各自关闭麦克风和主板的连接、释放截图内存。主板灯保持最后的颜色。</summary>
@@ -178,7 +188,8 @@ internal sealed class SyncEngine : IDisposable
         bool captureStopped = captureThread?.Join(stopTimeout) ?? true;
         bool sendStopped = sendThread?.Join(stopTimeout) ?? true;
         bool boardStopped = boardThread?.Join(stopTimeout) ?? true;
-        if (captureStopped && sendStopped && boardStopped)
+        bool gpuStopped = gpuThread?.Join(stopTimeout) ?? true;
+        if (captureStopped && sendStopped && boardStopped && gpuStopped)
         {
             stopping.Dispose();
         }
@@ -756,6 +767,152 @@ internal sealed class SyncEngine : IDisposable
         return leds;
     }
 
+    // ───────────────────────── 显卡线程 ─────────────────────────
+
+    /// <summary>显卡线程自己的状态（只在显卡线程里用）。</summary>
+    private sealed class GpuSendState
+    {
+        /// <summary>当前的显卡灯连接。没连上时为 null。</summary>
+        public GpuLight? Light { get; set; }
+
+        /// <summary>上次成功发出的颜色。颜色没变就不发；连接出问题时清空，重新连上后重发。</summary>
+        public Rgb? LastSent { get; set; }
+
+        /// <summary>下次尝试连接的时间（没连上时每秒重试一次）。</summary>
+        public TimeSpan NextConnectAttempt { get; set; }
+
+        /// <summary>上次记进日志的问题，同样的问题只记一次。</summary>
+        public string? LoggedProblem { get; set; }
+
+        public void Disconnect()
+        {
+            Light = null;
+            LastSent = null;
+        }
+    }
+
+    /// <summary>没连上显卡灯时，两次尝试连接之间至少隔多久。</summary>
+    private static readonly TimeSpan gpuReconnectInterval = TimeSpan.FromSeconds(1);
+
+    private void GpuLoop()
+    {
+        if (!config.GpuEnabled)
+        {
+            UpdateStatus(s => s with { GpuState = "显卡灯没有打开同步", GpuConnected = false });
+            return;
+        }
+
+        var interval = TimeSpan.FromMilliseconds(config.SendIntervalMs);
+        var state = new GpuSendState();
+        while (!stopping.IsCancellationRequested)
+        {
+            TimeSpan roundStart = clock.Elapsed;
+            try
+            {
+                SendGpuOnce(state);
+            }
+            catch (Exception ex)
+            {
+                // 线程最外层：任何意外都不能让程序崩溃。断开连接，之后自动重连
+                state.Disconnect();
+                string problem = $"显卡发送出错：{ex.GetType().Name}：{ex.Message}";
+                UpdateStatus(s => s with { GpuState = problem, GpuConnected = false });
+                LogGpuProblem(state, $"{problem}\n{ex.StackTrace}");
+            }
+
+            WaitUntil(roundStart + interval);
+        }
+    }
+
+    private void SendGpuOnce(GpuSendState state)
+    {
+        if (paused)
+        {
+            UpdateStatus(s => s with { GpuState = "已暂停，显卡灯保持当前颜色" });
+            return;
+        }
+
+        TimeSpan now = clock.Elapsed;
+        Rgb? wanted = FreeMode ? config.FreeGpuColor : CurrentOf(config.GpuColorSource, now);
+        if (wanted is not Rgb original)
+        {
+            UpdateStatus(s => s with { GpuState = "没有颜色可发，显卡灯保持当前颜色" });
+            return;
+        }
+
+        Rgb color = ColorEnhancer.StrengthenForLed(original, config.GpuColorBoost);
+        if (state.Light is not null && state.LastSent == color)
+        {
+            return;
+        }
+
+        if (state.Light is null && !TryConnectGpu(state, now))
+        {
+            return;
+        }
+
+        GpuLight light = state.Light!;
+        TimeSpan sendStart = clock.Elapsed;
+        bool sent = light.TrySetColor(color);
+        TimeSpan took = clock.Elapsed - sendStart;
+        if (took > stallThreshold)
+        {
+            StallLog.Write("显卡", $"给显卡发颜色很慢：{took.TotalMilliseconds:0} 毫秒");
+        }
+
+        if (!sent)
+        {
+            string problem = $"显卡灯断开：{light.LastError}（会自动重连）";
+            state.Disconnect();
+            UpdateStatus(s => s with { GpuState = problem, GpuConnected = false });
+            LogGpuProblem(state, problem);
+            return;
+        }
+
+        state.LastSent = color;
+        UpdateStatus(s => s with { GpuState = "显卡灯已连接，正在同步", GpuConnected = true });
+    }
+
+    /// <summary>连接显卡灯并打开直接控制模式。受重连间隔限制；失败时更新状态、记日志，返回 false。</summary>
+    private bool TryConnectGpu(GpuSendState state, TimeSpan now)
+    {
+        if (now < state.NextConnectAttempt)
+        {
+            return false;
+        }
+
+        state.NextConnectAttempt = now + gpuReconnectInterval;
+        GpuLight? light = GpuLight.TryConnect(out string? error);
+        if (light is not null && !light.TrySetDirectMode(true))
+        {
+            error = light.LastError;
+            light = null;
+        }
+
+        if (light is null)
+        {
+            string problem = $"等待显卡灯：{error}（每秒自动重试）";
+            UpdateStatus(s => s with { GpuState = problem, GpuConnected = false });
+            LogGpuProblem(state, problem);
+            return false;
+        }
+
+        state.Light = light;
+        state.LoggedProblem = null;
+        StallLog.Write("显卡", $"显卡灯已连上（{light.Ids}，{light.LedCount} 颗灯）");
+        return true;
+    }
+
+    /// <summary>显卡的问题记进日志：同样的问题只记一次，免得每秒刷一行。</summary>
+    private static void LogGpuProblem(GpuSendState state, string problem)
+    {
+        if (problem != state.LoggedProblem)
+        {
+            StallLog.Write("显卡", problem);
+            state.LoggedProblem = problem;
+        }
+    }
+
     // ───────────────────────── 小工具 ─────────────────────────
 
     /// <summary>启动日志里的设备设置，比如"麦克风 开，机箱灯 开（下半区），冷排灯 关"。</summary>
@@ -765,11 +922,12 @@ internal sealed class SyncEngine : IDisposable
         return $"模式 {ColorModeRules.TextOf(config.ColorMode)}，麦克风 {OnOff(config.MicEnabled)}，"
             + $"机箱灯 {DescribeBoardZone(config.CaseEnabled, config.CaseColorSource, config.CaseEffect)}，"
             + $"冷排灯 {DescribeBoardZone(config.RadiatorEnabled, config.RadiatorColorSource, config.RadiatorEffect)}，"
-            + $"主板灯 {DescribeOnboard(config.OnboardEnabled, config.OnboardColorSource, config.OnboardColorBoost)}";
+            + $"主板灯 {DescribeSolidLight(config.OnboardEnabled, config.OnboardColorSource, config.OnboardColorBoost)}，"
+            + $"显卡灯 {DescribeSolidLight(config.GpuEnabled, config.GpuColorSource, config.GpuColorBoost)}";
     }
 
-    /// <summary>主板灯的设置说明，比如"开（整张，颜色加强 60）"或"关"。日志、命令行显示共用。</summary>
-    public static string DescribeOnboard(bool enabled, ColorSource source, int colorBoost) =>
+    /// <summary>纯色灯（主板灯、显卡灯）的设置说明，比如"开（整张，颜色加强 60）"或"关"。日志、命令行显示共用。</summary>
+    public static string DescribeSolidLight(bool enabled, ColorSource source, int colorBoost) =>
         enabled ? $"开（{ColorSourceRules.TextOf(source)}，颜色加强 {(colorBoost == 0 ? "关" : colorBoost.ToString())}）" : "关";
 
     /// <summary>

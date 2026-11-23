@@ -9,14 +9,14 @@ namespace HyperLight.Tray;
 
 /// <summary>
 /// 托盘程序（M4）：屏幕右下角一个小圆点图标，上下两半显示当前的上、下两个颜色。
-/// 右键菜单：状态（麦克风、主板）、暂停 / 恢复、模式（跟壁纸 / 自由选色）、自由选色的颜色、增强颜色、取色方式、
-/// 麦克风 / 机箱灯 / 冷排灯 / 主板灯的开关，机箱灯和冷排灯的取色和灯效、加大差异（滑动条）、主板灯的取色、
-/// 开机自启、打开设置文件、重新读取设置、退出。
+/// 右键菜单：状态（麦克风、主板、显卡）、暂停 / 恢复、模式（跟壁纸 / 自由选色）、自由选色的颜色、增强颜色、取色方式、
+/// 麦克风 / 机箱灯 / 冷排灯 / 主板灯 / 显卡灯的开关，机箱灯和冷排灯的取色和灯效、加大差异（滑动条）、
+/// 主板灯和显卡灯的取色和颜色加强（滑动条）、开机自启、打开设置文件、重新读取设置、退出。
 /// </summary>
 /// <remarks>
 /// 界面只在主线程（界面线程）里操作。同步工作在 <see cref="SyncEngine"/> 自己的线程里进行，
 /// 界面每 0.5 秒读一次它的状态快照来刷新图标和菜单，两边不直接互相调用。
-/// 退出或暂停时停止发送：麦克风马上回到自带灯效，主板上的灯（机箱灯、冷排灯、主板灯）保持最后的颜色。
+/// 退出或暂停时停止发送：麦克风马上回到自带灯效，主板上的灯（机箱灯、冷排灯、主板灯）和显卡灯保持最后的颜色。
 /// </remarks>
 internal sealed class TrayApp : ApplicationContext
 {
@@ -33,6 +33,7 @@ internal sealed class TrayApp : ApplicationContext
     private readonly ContextMenuStrip menu;
     private readonly ToolStripMenuItem statusItem;
     private readonly ToolStripMenuItem boardStatusItem;
+    private readonly ToolStripMenuItem gpuStatusItem;
     private readonly ToolStripMenuItem pauseItem;
     private readonly ToolStripMenuItem boostItem;
     private readonly ToolStripMenuItem layoutMenu;
@@ -43,6 +44,7 @@ internal sealed class TrayApp : ApplicationContext
     private readonly ToolStripMenuItem freeRadiatorColorItem;
     private readonly ToolStripMenuItem freeRadiatorColor2Item;
     private readonly ToolStripMenuItem freeOnboardColorItem;
+    private readonly ToolStripMenuItem freeGpuColorItem;
     private readonly Dictionary<ZoneLayout, ToolStripMenuItem> layoutItems = new();
     private readonly ToolStripMenuItem micItem;
     private readonly ToolStripMenuItem caseItem;
@@ -58,6 +60,10 @@ internal sealed class TrayApp : ApplicationContext
     private readonly Dictionary<ColorSource, ToolStripMenuItem> onboardSourceItems = new();
     private readonly MenuSlider spreadSlider;
     private readonly MenuSlider onboardBoostSlider;
+    private readonly ToolStripMenuItem gpuItem;
+    private readonly ToolStripMenuItem gpuSourceMenu;
+    private readonly Dictionary<ColorSource, ToolStripMenuItem> gpuSourceItems = new();
+    private readonly MenuSlider gpuBoostSlider;
     private readonly ToolStripMenuItem autoStartItem;
     private readonly System.Windows.Forms.Timer refreshTimer;
 
@@ -106,6 +112,7 @@ internal sealed class TrayApp : ApplicationContext
 
         statusItem = new ToolStripMenuItem("正在启动…") { Enabled = false };
         boardStatusItem = new ToolStripMenuItem("主板：正在启动…") { Enabled = false };
+        gpuStatusItem = new ToolStripMenuItem("显卡：正在启动…") { Enabled = false };
         pauseItem = new ToolStripMenuItem("暂停同步", null, KeepOpen(TogglePause));
         boostItem = new ToolStripMenuItem("增强颜色（模仿 Wallpaper Engine）", null, KeepOpen(ToggleBoost));
         ToolStripMenuItem modeMenu = BuildChoiceMenu(
@@ -120,6 +127,7 @@ internal sealed class TrayApp : ApplicationContext
                 FreeRadiatorColor = color,
                 FreeRadiatorColor2 = color,
                 FreeOnboardColor = color,
+                FreeGpuColor = color,
             }));
         freeMicColorItem = ClosingItem("麦克风颜色…",
             () => PickColor(config.FreeMicColor, color => config with { FreeMicColor = color }));
@@ -131,6 +139,8 @@ internal sealed class TrayApp : ApplicationContext
             () => PickColor(config.FreeRadiatorColor, color => config with { FreeRadiatorColor = color }));
         freeRadiatorColor2Item = ClosingItem("冷排灯第二个颜色（双色、流动用）…",
             () => PickColor(config.FreeRadiatorColor2, color => config with { FreeRadiatorColor2 = color }));
+        freeGpuColorItem = ClosingItem("显卡灯颜色…",
+            () => PickColor(config.FreeGpuColor, color => config with { FreeGpuColor = color }));
         freeOnboardColorItem = ClosingItem("主板灯颜色…",
             () => PickColor(config.FreeOnboardColor, color => config with { FreeOnboardColor = color }));
         var freeColorMenu = new ToolStripMenuItem("自由选色");
@@ -144,6 +154,7 @@ internal sealed class TrayApp : ApplicationContext
             freeRadiatorColorItem,
             freeRadiatorColor2Item,
             freeOnboardColorItem,
+            freeGpuColorItem,
         });
         layoutMenu = new ToolStripMenuItem("取色方式");
         foreach (ZoneLayout layout in new[] { ZoneLayout.TopBottom, ZoneLayout.LeftRight, ZoneLayout.Whole })
@@ -193,6 +204,21 @@ internal sealed class TrayApp : ApplicationContext
                     ApplyConfig(config with { OnboardColorBoost = boost });
                 }
             });
+        gpuItem = new ToolStripMenuItem("显卡灯", null, KeepOpen(() => ApplyConfig(config with { GpuEnabled = !config.GpuEnabled })));
+        gpuSourceMenu = BuildChoiceMenu(
+            "显卡灯取色", ColorSourceRules.All, ColorSourceRules.TextOf, gpuSourceItems,
+            source => config.GpuColorSource != source, source => config with { GpuColorSource = source });
+        gpuBoostSlider = new MenuSlider(
+            boost => boost == 0
+                ? "显卡灯颜色加强：关闭（往右拖打开，淡颜色不再发白）"
+                : $"显卡灯颜色加强：{boost}（拖到最左边关闭）",
+            boost =>
+            {
+                if (boost != config.GpuColorBoost)
+                {
+                    ApplyConfig(config with { GpuColorBoost = boost });
+                }
+            });
         autoStartItem = new ToolStripMenuItem("开机自启", null, KeepOpen(ToggleAutoStart));
 
         menu = new ContextMenuStrip();
@@ -200,6 +226,7 @@ internal sealed class TrayApp : ApplicationContext
         {
             statusItem,
             boardStatusItem,
+            gpuStatusItem,
             new ToolStripSeparator(),
             pauseItem,
             modeMenu,
@@ -220,6 +247,10 @@ internal sealed class TrayApp : ApplicationContext
             onboardSourceMenu,
             onboardBoostSlider.Label,
             onboardBoostSlider.Host,
+            gpuItem,
+            gpuSourceMenu,
+            gpuBoostSlider.Label,
+            gpuBoostSlider.Host,
             new ToolStripSeparator(),
             autoStartItem,
             ClosingItem("打开设置文件", OpenConfigFile),
@@ -270,6 +301,7 @@ internal sealed class TrayApp : ApplicationContext
         string state = DescribeState(status, config);
         statusItem.Text = state;
         boardStatusItem.Text = $"主板：{status.BoardState}";
+        gpuStatusItem.Text = $"显卡：{status.GpuState}";
         pauseItem.Text = status.Paused ? "恢复同步" : "暂停同步";
 
         string tooltip = Truncate($"HyperLight：{state}", maxTooltipLength);
@@ -317,7 +349,7 @@ internal sealed class TrayApp : ApplicationContext
     {
         if (status.Paused)
         {
-            return "已暂停（麦克风显示自带灯效，主板上的灯保持当前颜色）";
+            return "已暂停（麦克风显示自带灯效，主板和显卡的灯保持当前颜色）";
         }
 
         if (status.Target is not ZoneColors target)
@@ -347,6 +379,8 @@ internal sealed class TrayApp : ApplicationContext
         radiatorItem.Checked = config.RadiatorEnabled;
         onboardItem.Checked = config.OnboardEnabled;
         CheckOnly(onboardSourceItems, config.OnboardColorSource);
+        gpuItem.Checked = config.GpuEnabled;
+        CheckOnly(gpuSourceItems, config.GpuColorSource);
         CheckOnly(caseSourceItems, config.CaseColorSource);
         CheckOnly(radiatorSourceItems, config.RadiatorColorSource);
         CheckOnly(caseEffectItems, config.CaseEffect);
@@ -354,6 +388,7 @@ internal sealed class TrayApp : ApplicationContext
 
         spreadSlider.Show(config.TwoColorSpread);
         onboardBoostSlider.Show(config.OnboardColorBoost);
+        gpuBoostSlider.Show(config.GpuColorBoost);
 
         // 双色、流动灯效用的是固定的两块区域，取色只在单色时有用：不用时变灰，免得以为点了没反应
         // 自由选色时不截图，和壁纸有关的选项（增强颜色、取色方式、取色、加大差异）都用不到，一起变灰
@@ -364,6 +399,7 @@ internal sealed class TrayApp : ApplicationContext
         caseSourceMenu.Enabled = wallpaperMode && config.CaseEffect == LightEffect.Solid;
         radiatorSourceMenu.Enabled = wallpaperMode && config.RadiatorEffect == LightEffect.Solid;
         onboardSourceMenu.Enabled = wallpaperMode;
+        gpuSourceMenu.Enabled = wallpaperMode;
 
         CheckOnly(modeItems, config.ColorMode);
         SetSwatch(freeMicColorItem, config.FreeMicColor);
@@ -372,6 +408,7 @@ internal sealed class TrayApp : ApplicationContext
         SetSwatch(freeRadiatorColorItem, config.FreeRadiatorColor);
         SetSwatch(freeRadiatorColor2Item, config.FreeRadiatorColor2);
         SetSwatch(freeOnboardColorItem, config.FreeOnboardColor);
+        SetSwatch(freeGpuColorItem, config.FreeGpuColor);
 
         autoStartItem.Checked = IsAutoStartEnabledSafe();
     }
@@ -620,6 +657,7 @@ internal sealed class TrayApp : ApplicationContext
             refreshTimer.Stop();
             spreadSlider.Stop();
             onboardBoostSlider.Stop();
+            gpuBoostSlider.Stop();
             engine.Dispose();
             notifyIcon.Visible = false;
         }
@@ -635,11 +673,12 @@ internal sealed class TrayApp : ApplicationContext
             refreshTimer.Dispose();
             spreadSlider.Dispose();
             onboardBoostSlider.Dispose();
+            gpuBoostSlider.Dispose();
             engine.Dispose();
             notifyIcon.Dispose();
             foreach (ToolStripMenuItem item in new[]
             {
-                freeMicColorItem, freeCaseColorItem, freeCaseColor2Item, freeRadiatorColorItem, freeRadiatorColor2Item, freeOnboardColorItem,
+                freeMicColorItem, freeCaseColorItem, freeCaseColor2Item, freeRadiatorColorItem, freeRadiatorColor2Item, freeOnboardColorItem, freeGpuColorItem,
             })
             {
                 item.Image?.Dispose();

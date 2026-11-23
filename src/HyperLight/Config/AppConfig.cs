@@ -66,6 +66,15 @@ internal sealed record AppConfig
     [Description("主板灯颜色加强（0～100）：主板灯灯珠少，淡颜色看起来发白；加强后亮度不变、颜色更浓（灰色、白色没有颜色可加强）。0 表示关闭。跟壁纸、自由选色都有效。托盘菜单里可以用滑动条调。默认 60")]
     public int OnboardColorBoost { get; init; } = 60;
 
+    [Description("显卡灯（华硕 ROG STRIX RTX 4090 白色版）：true 跟着壁纸变色；false 不再改变，停在最后的颜色。默认 true")]
+    public bool GpuEnabled { get; init; } = true;
+
+    [Description("显卡灯取色：upper 上半区；lower 下半区；left 左半区；right 右半区；average 整张。默认 average")]
+    public ColorSource GpuColorSource { get; init; } = ColorSource.Average;
+
+    [Description("显卡灯颜色加强（0～100）：淡颜色在 LED 上看起来发白，加强后亮度不变、颜色更浓。0 表示关闭。托盘菜单里可以用滑动条调。默认 60")]
+    public int GpuColorBoost { get; init; } = 60;
+
     [Description("机箱灯取色（灯效是单色时用）：upper 上半区；lower 下半区；left 左半区；right 右半区；average 整张。默认 lower")]
     public ColorSource CaseColorSource { get; init; } = ColorSource.Lower;
 
@@ -101,6 +110,9 @@ internal sealed record AppConfig
 
     [Description("自由选色：主板灯（AORUS 字）的颜色")]
     public Rgb FreeOnboardColor { get; init; } = new(0xFF, 0x69, 0xB4);
+
+    [Description("自由选色：显卡灯的颜色")]
+    public Rgb FreeGpuColor { get; init; } = new(0xFF, 0x69, 0xB4);
 
     [Description("双色、流动图案每几颗灯重复一次。底部、侧面风扇是 8 颗灯，后置风扇 16 颗；默认 8，每个风扇正好一整圈。范围 2～64")]
     public int FlowPeriodLeds { get; init; } = 8;
@@ -211,6 +223,7 @@ internal sealed record AppConfig
             FlowPeriodLeds = InRange(nameof(FlowPeriodLeds), FlowPeriodLeds, 2, 64, defaults.FlowPeriodLeds, notes),
             TwoColorSpread = InRange(nameof(TwoColorSpread), TwoColorSpread, 0, 100, defaults.TwoColorSpread, notes),
             OnboardColorBoost = InRange(nameof(OnboardColorBoost), OnboardColorBoost, 0, 100, defaults.OnboardColorBoost, notes),
+            GpuColorBoost = InRange(nameof(GpuColorBoost), GpuColorBoost, 0, 100, defaults.GpuColorBoost, notes),
         };
     }
 
