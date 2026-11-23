@@ -96,7 +96,7 @@ CPU_FAN ── 水冷转速；SYS_FAN4 ── 后置风扇转速
 
 - **机箱灯光按钮**：长按会在「集线板自己的灯效 → 关闭 → 主板控制」之间轮流切换。**要停在「主板控制」**，机箱灯才会听 HyperLight 的。断电重启后集线板可能会变回自己的灯效，再长按切回来就行。
 - **OpenRGB、技嘉 GCC / RGB Fusion 要关掉**：它们也会控制主板灯光芯片，和 HyperLight 抢。HyperLight 检测到 OpenRGB 在运行会弹提醒。
-- **灯珠数**：建议在设置文件里把 `caseLedCount`、`radiatorLedCount` 改成 64。每个包大约 3 毫秒，256 颗灯一帧要 28 个包（约 90 毫秒），流动会卡；64 颗只要 8 个包（约 25 毫秒）。
+- **灯珠数**：默认 64（`caseLedCount`、`radiatorLedCount`）。每个包大约 3 毫秒，256 颗灯一帧要 28 个包（约 90 毫秒），流动会卡；64 颗只要 8 个包（约 25 毫秒）。
 - **已知硬件问题**：水冷侧面灯条三分之一处有一颗灯珠接触不良，中间那个风扇偶尔会闪，后面的灯常常收不到数据（`board range` 测试：第 1～64 颗之后全黑）。软件修不了，可以找售后。
 - **显卡灯**：Armoury Crate、GPU Tweak 也能控制显卡灯，开着可能会抢。Armoury Crate 结束进程后会被它的后台服务重新拉起来；如果显卡灯被改回去，到 `services.msc` 里停掉它的服务（比如 LightingService），启动类型改成「手动」。
 - **ARGB_V2_1 和 ARGB_V2_3 是同一个通道**（OpenRGB 资料），所以主板只有两个能分开控制的 ARGB 接口。OpenRGB 里叫 `ARGB_V2_3` 的就是 `ARGB_V2_1`。
@@ -127,14 +127,14 @@ CPU_FAN ── 水冷转速；SYS_FAN4 ── 后置风扇转速
 | `flowCycleMs` | 2000 | 流动转一圈多少毫秒，范围 500～20000 |
 | `freeMicColor` 等 7 项 | FF69B4 / 8A2BE2 | 自由选色的颜色，写成 6 位十六进制 |
 | `flowPeriodLeds` | 8 | 双色、流动图案每几颗灯重复一次，范围 2～64 |
-| `caseLedCount` / `radiatorLedCount` | 256 | 发给多少颗灯，范围 1～256（建议改成 64） |
+| `caseLedCount` / `radiatorLedCount` | 64 | 发给多少颗灯，范围 1～256 |
 
 （以 `src/HyperLight/Config/AppConfig.cs` 为准。）
 
 ## 诊断工具
 
 带命令运行时是诊断工具。因为 `HyperLight.exe` 是窗口程序，请通过 `.bat` 文件运行（`.bat` 要和 exe 放在同一个文件夹）。
-**运行和主板有关的测试前，先退出托盘里的 HyperLight 和 OpenRGB**，不然会互相抢。
+**会写硬件的测试命令**（`color`、`board color/count/range/flow/onboard`、`gpu color/release`）**要先退出托盘里的 HyperLight**，否则程序会拒绝运行并提示；只读的诊断（`list`、`board`、`gpu`）可以随时运行。
 脚本里只写英文：Windows 命令行默认按 GBK 读取 .bat，写 UTF-8 中文可能导致命令错乱。
 
 | 命令 | 作用 | 测试脚本 |

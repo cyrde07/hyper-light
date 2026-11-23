@@ -100,8 +100,8 @@ internal static class GpuLightProtocol
     public const int MaxLeds = 32;
 
     /// <summary>
-    /// 这些型号的芯片，灯珠数在配置表第 0x03 个字节；其他型号在第 0x02 个字节（OpenRGB 的规则）。
-    /// AUMA0-E6K5-1111 是 OpenRGB 记录的 ROG STRIX 4090 的芯片。
+    /// 允许控制的芯片型号（OpenRGB 收录过的 RTX 40 系列 ENE 芯片，灯珠数都在配置表第 0x03 个字节）。
+    /// G0 实测 Luca 的显卡是 AUMA0-E6K5-1110。不在这里的型号一律不控制。
     /// </summary>
     private static readonly string[] ledCountAtOffset3 =
     {
@@ -149,18 +149,16 @@ internal static class GpuLightProtocol
     public static byte[] EncodeRegisterAddress(ushort register) => new[] { (byte)(register >> 8), (byte)(register & 0xFF) };
 
     /// <summary>
-    /// 按 OpenRGB 的规则从配置表读灯珠数：列表里的型号看第 0x03 个字节，其他 AUMA0 型号看第 0x02 个字节。
-    /// OpenRGB 只认它收录过的型号，这里对没收录的 AUMA0 型号也给一个参考值（不一定准，G1 测试时确认）。
-    /// 不是 AUMA0 型号返回 null。
+    /// 从配置表读灯珠数。只认上面列表里的芯片型号（OpenRGB 收录过、灯珠数在第 0x03 个字节的那几个，
+    /// Luca 的 AUMA0-E6K5-1110 也在里面）；不在列表里的型号返回 null，程序就不控制它。
     /// </summary>
     public static int? LedCountOf(string deviceName, ReadOnlySpan<byte> configTable)
     {
-        if (configTable.Length < ConfigTableLength || !deviceName.StartsWith("AUMA0-", StringComparison.Ordinal))
+        if (configTable.Length < ConfigTableLength || !ledCountAtOffset3.Contains(deviceName))
         {
             return null;
         }
 
-        int offset = ledCountAtOffset3.Contains(deviceName) ? 0x03 : 0x02;
-        return configTable[offset];
+        return configTable[0x03];
     }
 }

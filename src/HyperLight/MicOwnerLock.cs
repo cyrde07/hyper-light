@@ -1,8 +1,10 @@
 ﻿namespace HyperLight;
 
 /// <summary>
-/// 同一时间只允许一个 HyperLight 往麦克风发颜色。托盘程序、sync 命令、color 命令共用这把锁：
+/// 同一时间只允许一个 HyperLight 控制灯光。托盘程序、sync 命令，以及所有会写硬件的测试命令
+/// （color、board color / count / range / flow / onboard、gpu color / release）共用这把锁：
 /// 两个程序同时发，灯会乱闪；开机自启的托盘程序在运行时，再双击 exe 也不会多开一个。
+/// 只读的诊断命令（list、board、gpu）不需要这把锁。
 /// </summary>
 /// <remarks>
 /// 用 Windows 的"具名互斥锁"（Mutex）实现，程序退出（包括崩溃）时系统会自动释放。
@@ -15,7 +17,7 @@ internal sealed class MicOwnerLock : IDisposable
 
     /// <summary>命令行版本拿不到锁时显示的提示。</summary>
     public const string BusyMessage =
-        "另一个 HyperLight 正在控制麦克风（多半是右下角托盘里的那个）。请先在托盘图标上右键 → 退出，再运行这个命令。";
+        "另一个 HyperLight 正在控制灯光（多半是右下角托盘里的那个）。请先在托盘图标上右键 → 退出，再运行这个命令。";
 
     private readonly Mutex mutex;
     private bool disposed;

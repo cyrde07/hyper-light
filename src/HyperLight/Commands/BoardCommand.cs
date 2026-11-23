@@ -63,6 +63,14 @@ internal static class BoardCommand
         bool apply = rest.Contains(applyOption, StringComparer.OrdinalIgnoreCase);
         string[] values = rest.Where(arg => !arg.Equals(applyOption, StringComparison.OrdinalIgnoreCase)).ToArray();
 
+        // 下面的子命令都会写主板：托盘程序在运行时不允许，免得两边同时控制
+        using MicOwnerLock? owner = MicOwnerLock.TryAcquire();
+        if (owner is null)
+        {
+            Console.WriteLine(MicOwnerLock.BusyMessage);
+            return 3;
+        }
+
         return sub switch
         {
             "color" => RunColor(values, apply),

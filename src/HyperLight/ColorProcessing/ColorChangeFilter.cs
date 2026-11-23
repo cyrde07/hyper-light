@@ -65,7 +65,7 @@ internal sealed class ColorChangeFilter
                 return true;
             }
 
-            if (Difference(captured, target) < threshold)
+            if (IsSame(captured, target))
             {
                 // 和当前颜色差不多：之前等待确认的新颜色作废（比如过渡画面闪了一下又回来了）
                 pendingCount = 0;
@@ -73,7 +73,7 @@ internal sealed class ColorChangeFilter
             }
 
             // 差别够大：和上一次等待确认的颜色差不多就累计，否则从这次重新算
-            if (pendingCount > 0 && Difference(captured, pending) < threshold)
+            if (pendingCount > 0 && IsSame(captured, pending))
             {
                 pendingCount++;
             }
@@ -114,6 +114,12 @@ internal sealed class ColorChangeFilter
             pendingCount = 0;
         }
     }
+
+    /// <summary>
+    /// 两个颜色算不算"一样"：差别小于门槛。门槛是 0 时，完全相同的颜色也要算一样
+    /// （不然 0 &lt; 0 不成立，同一个新颜色永远确认不了，颜色会卡住）。
+    /// </summary>
+    private bool IsSame(Rgb a, Rgb b) => Difference(a, b) < Math.Max(threshold, 1);
 
     /// <summary>两个颜色的差别：红、绿、蓝三项里相差最大的那一项（0～255）。</summary>
     public static int Difference(Rgb a, Rgb b) =>

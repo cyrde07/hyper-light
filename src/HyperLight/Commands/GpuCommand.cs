@@ -26,6 +26,14 @@ internal static class GpuCommand
             return RunInfo();
         }
 
+        // 下面的子命令都会写显卡：托盘程序在运行时不允许，免得两边同时控制
+        using MicOwnerLock? owner = MicOwnerLock.TryAcquire();
+        if (owner is null)
+        {
+            Console.WriteLine(MicOwnerLock.BusyMessage);
+            return 3;
+        }
+
         string sub = args[0].Trim().ToLowerInvariant();
         return sub switch
         {

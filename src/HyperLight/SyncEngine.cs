@@ -71,7 +71,7 @@ internal sealed record SyncStatus
 ///             流动灯效要一直发（每秒约 20 次），图案才会转。双色、流动的两个颜色太像时，先"加大差异"。
 ///             主板每次要发很多个包（比麦克风慢），单独一个线程，不会拖慢麦克风。
 ///   显卡线程：显卡灯（纯色）只在颜色变了时才发。经过 NVIDIA 驱动的 I2C 一次要传二十来次，比主板还慢，
-///             单独一个线程，不会拖慢风扇的流动。连不上时每秒重试一次。
+///             单独一个线程，不会拖慢风扇的流动。最快每 100 毫秒发一次；连不上时越等越久再重试（1 秒起，最长 1 分钟）。
 /// 找不到壁纸超过 WallpaperLostGraceMs，或者暂停时，麦克风停止发送、回到自带灯效；主板和显卡的灯保持最后的颜色。
 /// 自由选色模式：不截图，每个设备直接用设置里选好的固定颜色（不做加大差异，颜色是用户亲手选的）。
 /// sync 命令和托盘程序都使用它。
@@ -89,6 +89,13 @@ internal sealed class SyncEngine : IDisposable
 
     /// <summary>流动灯效多久发一帧（每秒约 20 帧，转起来够流畅，USB 负担也不大）。</summary>
     private static readonly TimeSpan flowFrameInterval = TimeSpan.FromMilliseconds(50);
+
+    // 每个设备一把锁：同一时间只允许一个线程给这个设备发数据。
+    // 改设置会重建同步引擎；万一旧引擎的线程卡在硬件调用里没及时停下，新引擎的线程会在这里等它，
+    // 不会两个线程同时往同一个设备写（static：新旧引擎共用同一把锁）。
+    private static readonly object micGate = new();
+    private static readonly object boardGate = new();
+    private static readonly object gpuGate = new();
 
     /// <summary>停止时最多等每个线程收尾多久。</summary>
     private static readonly TimeSpan stopTimeout = TimeSpan.FromSeconds(5);
@@ -192,7 +199,13 @@ internal sealed class SyncEngine : IDisposable
         if (captureStopped && sendStopped && boardStopped && gpuStopped)
         {
             stopping.Dispose();
+            return;
         }
+
+        // 有线程没及时停下：记下来。硬件线程靠设备锁保证不会和新引擎同时写同一个设备
+        StallLog.Write("停止", $"有线程没有在 {stopTimeout.TotalSeconds:0} 秒内停下："
+            + $"截图 {(captureStopped ? "已停" : "未停")}、麦克风 {(sendStopped ? "已停" : "未停")}、"
+            + $"主板 {(boardStopped ? "已停" : "未停")}、显卡 {(gpuStopped ? "已停" : "未停")}");
     }
 
     // ───────────────────────── 截图线程 ─────────────────────────
@@ -249,8 +262,10 @@ internal sealed class SyncEngine : IDisposable
             }
             catch (Exception ex)
             {
-                // 线程最外层：任何意外都不能让程序崩溃。记下原因，下一轮重新找窗口再试
+                // 线程最外层：任何意外都不能让程序崩溃。记下原因，下一轮重新找窗口再试。
+                // 和"找不到壁纸"走同一条路：一直出错超过宽限期，就不再用旧颜色
                 target = null;
+                HandleWallpaperMissing(lastSuccess, lostGrace);
                 UpdateStatus(s => s with { LastError = $"截图出错：{ex.GetType().Name}：{ex.Message}" });
             }
 
@@ -485,7 +500,12 @@ internal sealed class SyncEngine : IDisposable
             return;
         }
 
-        SendResult result = mic.SendFrame(upper, lower);
+        SendResult result;
+        lock (micGate)
+        {
+            result = mic.SendFrame(upper, lower);
+        }
+
         string micState = result switch
         {
             SendResult.Sent => "麦克风已连接，正在发送颜色",
@@ -619,7 +639,11 @@ internal sealed class SyncEngine : IDisposable
             }
 
             TimeSpan sendStart = clock.Elapsed;
-            result = board.SendZone(setting.Zone, leds);
+            lock (boardGate)
+            {
+                result = board.SendZone(setting.Zone, leds);
+            }
+
             TimeSpan took = clock.Elapsed - sendStart;
             if (took > stallThreshold)
             {
@@ -688,11 +712,15 @@ internal sealed class SyncEngine : IDisposable
         }
 
         bool firstSinceConnect = lastSent.Onboard is null;
-        SendResult result = board.SendOnboard(new[]
+        SendResult result;
+        lock (boardGate)
         {
-            (MotherboardOnboardLight.IoCoverTop, color),
-            (MotherboardOnboardLight.IoCoverBottom, color),
-        });
+            result = board.SendOnboard(new[]
+            {
+                (MotherboardOnboardLight.IoCoverTop, color),
+                (MotherboardOnboardLight.IoCoverBottom, color),
+            });
+        }
 
         // 每次连上（或重启同步）后第一次发主板灯、以及发送失败时，记进日志，方便排查"主板灯不变色"
         if (firstSinceConnect || result != SendResult.Sent)
@@ -778,8 +806,14 @@ internal sealed class SyncEngine : IDisposable
         /// <summary>上次成功发出的颜色。颜色没变就不发；连接出问题时清空，重新连上后重发。</summary>
         public Rgb? LastSent { get; set; }
 
-        /// <summary>下次尝试连接的时间（没连上时每秒重试一次）。</summary>
+        /// <summary>下次尝试连接的时间。</summary>
         public TimeSpan NextConnectAttempt { get; set; }
+
+        /// <summary>现在连续失败后要等多久再试：1 秒起，每失败一次翻倍，最长 1 分钟；连上后恢复 1 秒。</summary>
+        public TimeSpan ReconnectDelay { get; set; } = gpuReconnectMin;
+
+        /// <summary>上次发颜色的时间（发送限速用）。</summary>
+        public TimeSpan LastSendTime { get; set; } = TimeSpan.MinValue;
 
         /// <summary>上次记进日志的问题，同样的问题只记一次。</summary>
         public string? LoggedProblem { get; set; }
@@ -791,8 +825,17 @@ internal sealed class SyncEngine : IDisposable
         }
     }
 
-    /// <summary>没连上显卡灯时，两次尝试连接之间至少隔多久。</summary>
-    private static readonly TimeSpan gpuReconnectInterval = TimeSpan.FromSeconds(1);
+    /// <summary>显卡灯连不上时，第一次重试前等多久。</summary>
+    private static readonly TimeSpan gpuReconnectMin = TimeSpan.FromSeconds(1);
+
+    /// <summary>显卡灯连续连不上时，最长等多久再试（免得驱动不支持时一直反复检查芯片）。</summary>
+    private static readonly TimeSpan gpuReconnectMax = TimeSpan.FromMinutes(1);
+
+    /// <summary>
+    /// 给显卡发颜色的最短间隔。每发一次要经过 NVIDIA 驱动传二十来次，渐变期间不必每 33 毫秒发一次；
+    /// 100 毫秒一次肉眼看不出差别，渐变最后会停在准确的目标颜色上。
+    /// </summary>
+    private static readonly TimeSpan gpuMinSendInterval = TimeSpan.FromMilliseconds(100);
 
     private void GpuLoop()
     {
@@ -841,7 +884,7 @@ internal sealed class SyncEngine : IDisposable
         }
 
         Rgb color = ColorEnhancer.StrengthenForLed(original, config.GpuColorBoost);
-        if (state.Light is not null && state.LastSent == color)
+        if (state.Light is not null && (state.LastSent == color || now - state.LastSendTime < gpuMinSendInterval))
         {
             return;
         }
@@ -853,7 +896,13 @@ internal sealed class SyncEngine : IDisposable
 
         GpuLight light = state.Light!;
         TimeSpan sendStart = clock.Elapsed;
-        bool sent = light.TrySetColor(color);
+        state.LastSendTime = sendStart;
+        bool sent;
+        lock (gpuGate)
+        {
+            sent = light.TrySetColor(color);
+        }
+
         TimeSpan took = clock.Elapsed - sendStart;
         if (took > stallThreshold)
         {
@@ -881,23 +930,30 @@ internal sealed class SyncEngine : IDisposable
             return false;
         }
 
-        state.NextConnectAttempt = now + gpuReconnectInterval;
-        GpuLight? light = GpuLight.TryConnect(out string? error);
-        if (light is not null && !light.TrySetDirectMode(true))
+        GpuLight? light;
+        string? error;
+        lock (gpuGate)
         {
-            error = light.LastError;
-            light = null;
+            light = GpuLight.TryConnect(out error);
+            if (light is not null && !light.TrySetDirectMode(true))
+            {
+                error = light.LastError;
+                light = null;
+            }
         }
 
         if (light is null)
         {
-            string problem = $"等待显卡灯：{error}（每秒自动重试）";
+            state.NextConnectAttempt = now + state.ReconnectDelay;
+            string problem = $"等待显卡灯：{error}（{state.ReconnectDelay.TotalSeconds:0} 秒后重试）";
+            state.ReconnectDelay = TimeSpan.FromTicks(Math.Min(state.ReconnectDelay.Ticks * 2, gpuReconnectMax.Ticks));
             UpdateStatus(s => s with { GpuState = problem, GpuConnected = false });
-            LogGpuProblem(state, problem);
+            LogGpuProblem(state, $"等待显卡灯：{error}");   // 日志里不写等待秒数，同样的原因只记一次
             return false;
         }
 
         state.Light = light;
+        state.ReconnectDelay = gpuReconnectMin;
         state.LoggedProblem = null;
         StallLog.Write("显卡", $"显卡灯已连上（{light.Ids}，{light.LedCount} 颗灯）");
         return true;

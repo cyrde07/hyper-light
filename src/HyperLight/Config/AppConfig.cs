@@ -117,11 +117,11 @@ internal sealed record AppConfig
     [Description("双色、流动图案每几颗灯重复一次。底部、侧面风扇是 8 颗灯，后置风扇 16 颗；默认 8，每个风扇正好一整圈。范围 2～64")]
     public int FlowPeriodLeds { get; init; } = 8;
 
-    [Description("机箱灯的灯珠数：发颜色时发给多少颗灯。数多了没关系，数少了后面的灯不会变色。默认 256（主板接口的上限）。范围 1～256")]
-    public int CaseLedCount { get; init; } = 256;
+    [Description("机箱灯的灯珠数：发颜色时发给多少颗灯。数多了没关系，数少了后面的灯不会变色。默认 64（风扇最多 16 颗，留够灯条的份；灯珠越少，流动越流畅）。范围 1～256")]
+    public int CaseLedCount { get; init; } = 64;
 
-    [Description("冷排灯的灯珠数：发颜色时发给多少颗灯。数多了没关系，数少了后面的灯不会变色。默认 256（主板接口的上限）。范围 1～256")]
-    public int RadiatorLedCount { get; init; } = 256;
+    [Description("冷排灯的灯珠数：发颜色时发给多少颗灯。数多了没关系，数少了后面的灯不会变色。默认 64（M5 实测冷排能收到数据的灯不到 64 颗）。范围 1～256")]
+    public int RadiatorLedCount { get; init; } = 64;
 
     /// <summary>配置文件的位置：exe 旁边的 hyperlight.json。</summary>
     public static string DefaultPath => Path.Combine(AppContext.BaseDirectory, "hyperlight.json");
@@ -190,17 +190,34 @@ internal sealed record AppConfig
     /// </summary>
     public static bool TrySave(AppConfig config, string path, out string? error)
     {
+        string temporaryPath = path + ".tmp";
         try
         {
+            // 先写到临时文件，写完再替换原文件：写到一半断电或死机时，原文件还是完整的
             // UTF-8 带 BOM：Windows 记事本打开中文说明不会乱码
-            File.WriteAllText(path, ToCommentedJson(config), new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+            File.WriteAllText(temporaryPath, ToCommentedJson(config), new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+            File.Move(temporaryPath, path, overwrite: true);
             error = null;
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             error = ex.Message;
+            TryDelete(temporaryPath);
             return false;
+        }
+    }
+
+    /// <summary>删掉保存失败时留下的临时文件。删不掉也没关系，下次保存会覆盖它。</summary>
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // 忽略
         }
     }
 
