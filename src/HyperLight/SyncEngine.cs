@@ -815,6 +815,9 @@ internal sealed class SyncEngine : IDisposable
         /// <summary>上次发颜色的时间（发送限速用）。</summary>
         public TimeSpan LastSendTime { get; set; } = TimeSpan.MinValue;
 
+        /// <summary>上次检查"显卡灯还是不是我们设的样子"的时间。</summary>
+        public TimeSpan LastOwnershipCheck { get; set; }
+
         /// <summary>上次记进日志的问题，同样的问题只记一次。</summary>
         public string? LoggedProblem { get; set; }
 
@@ -836,6 +839,12 @@ internal sealed class SyncEngine : IDisposable
     /// 100 毫秒一次肉眼看不出差别，渐变最后会停在准确的目标颜色上。
     /// </summary>
     private static readonly TimeSpan gpuMinSendInterval = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>
+    /// 多久检查一次显卡灯有没有被别的程序改掉。M5 日志实测：开机时 HyperLight 先连上显卡发了颜色，
+    /// 之后 Armoury Crate 的后台服务又把显卡灯改回去了；颜色不变时程序不会再发，所以要定期读回来看看。
+    /// </summary>
+    private static readonly TimeSpan gpuOwnershipCheckInterval = TimeSpan.FromSeconds(3);
 
     private void GpuLoop()
     {
@@ -884,7 +893,13 @@ internal sealed class SyncEngine : IDisposable
         }
 
         Rgb color = ColorEnhancer.StrengthenForLed(original, config.GpuColorBoost);
-        if (state.Light is not null && (state.LastSent == color || now - state.LastSendTime < gpuMinSendInterval))
+        if (state.Light is not null && state.LastSent == color)
+        {
+            CheckGpuStillOurs(state, color, now);
+            return;
+        }
+
+        if (state.Light is not null && now - state.LastSendTime < gpuMinSendInterval)
         {
             return;
         }
@@ -920,6 +935,55 @@ internal sealed class SyncEngine : IDisposable
 
         state.LastSent = color;
         UpdateStatus(s => s with { GpuState = "显卡灯已连接，正在同步", GpuConnected = true });
+    }
+
+    /// <summary>
+    /// 颜色没变时，每隔几秒读回来检查一次显卡灯是不是被别的程序改掉了。
+    /// 被改掉了就重新打开直接控制模式、重发颜色；读失败就当连接断了，之后自动重连。
+    /// </summary>
+    private void CheckGpuStillOurs(GpuSendState state, Rgb color, TimeSpan now)
+    {
+        if (state.Light is not GpuLight light || now - state.LastOwnershipCheck < gpuOwnershipCheckInterval)
+        {
+            return;
+        }
+
+        state.LastOwnershipCheck = now;
+        bool? stillOurs;
+        lock (gpuGate)
+        {
+            stillOurs = light.TryCheckStillOurs(color);
+        }
+
+        if (stillOurs == true)
+        {
+            return;
+        }
+
+        if (stillOurs is null)
+        {
+            string problem = $"显卡灯断开：{light.LastError}（会自动重连）";
+            state.Disconnect();
+            UpdateStatus(s => s with { GpuState = problem, GpuConnected = false });
+            LogGpuProblem(state, problem);
+            return;
+        }
+
+        // 被别的程序改掉了：抢回来。同样的事只记一次日志，免得和别的程序来回抢时刷屏
+        LogGpuProblem(state, "显卡灯被别的程序改掉了，已改回（多半是 Armoury Crate 的后台服务；一直这样的话请停掉它的服务）");
+        bool restored;
+        lock (gpuGate)
+        {
+            restored = light.TrySetDirectMode(true) && light.TrySetColor(color);
+        }
+
+        if (!restored)
+        {
+            string problem = $"显卡灯断开：{light.LastError}（会自动重连）";
+            state.Disconnect();
+            UpdateStatus(s => s with { GpuState = problem, GpuConnected = false });
+            LogGpuProblem(state, problem);
+        }
     }
 
     /// <summary>连接显卡灯并打开直接控制模式。受重连间隔限制；失败时更新状态、记日志，返回 false。</summary>

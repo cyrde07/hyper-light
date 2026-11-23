@@ -80,6 +80,36 @@ internal sealed class GpuLight
         TryWriteRegister(GpuLightProtocol.DirectModeRegister, enabled ? (byte)1 : (byte)0)
         && TryWriteRegister(GpuLightProtocol.ApplyRegister, GpuLightProtocol.ApplyValue);
 
+    /// <summary>
+    /// 检查显卡灯是不是还是我们设的样子：直接控制模式还开着，第 1 颗灯的颜色还是 <paramref name="expected"/>。
+    /// 只读，不写任何东西（读之前的"写位置"不改设置）。读失败时返回 null（连接可能断了）。
+    /// 用来发现别的程序（比如 Armoury Crate 的后台服务）把显卡灯改掉了。
+    /// </summary>
+    public bool? TryCheckStillOurs(Rgb expected)
+    {
+        if (!TryReadRegister(GpuLightProtocol.DirectModeRegister, out byte direct))
+        {
+            return null;
+        }
+
+        Span<byte> expectedBytes = stackalloc byte[3];
+        GpuLightProtocol.WriteColor(expectedBytes, expected);
+        for (int i = 0; i < 3; i++)
+        {
+            if (!TryReadRegister((ushort)(GpuLightProtocol.DirectColorsRegister + i), out byte actual))
+            {
+                return null;
+            }
+
+            if (actual != expectedBytes[i])
+            {
+                return false;
+            }
+        }
+
+        return direct != 0;
+    }
+
     /// <summary>把所有灯设成同一个颜色（要先打开直接控制模式）。</summary>
     public bool TrySetColor(Rgb color)
     {

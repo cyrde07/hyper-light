@@ -1,0 +1,38 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    自动测试：检查颜色处理、设置文件、设备协议这些"纯逻辑"部分，不需要连接任何硬件，也不需要 Windows。
+    运行方法：dotnet test tests/HyperLight.Tests
+    不引用主程序（主程序是 Windows 窗口程序），而是直接编译主程序里不依赖界面和硬件的源文件，
+    所以测试的就是主程序用的同一份代码。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>HyperLight.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <!-- 被测试的源文件（只放纯逻辑：颜色、设置、协议格式） -->
+  <ItemGroup>
+    <Compile Include="..\..\src\HyperLight\Rgb.cs" Link="Source\Rgb.cs" />
+    <Compile Include="..\..\src\HyperLight\ColorProcessing\*.cs" Link="Source\ColorProcessing\%(Filename)%(Extension)" />
+    <Compile Include="..\..\src\HyperLight\Config\*.cs" Link="Source\Config\%(Filename)%(Extension)" />
+    <Compile Include="..\..\src\HyperLight\Device\UsbId.cs" Link="Source\Device\UsbId.cs" />
+    <Compile Include="..\..\src\HyperLight\Device\QuadcastProtocol.cs" Link="Source\Device\QuadcastProtocol.cs" />
+    <Compile Include="..\..\src\HyperLight\Device\QuadcastDeviceIds.cs" Link="Source\Device\QuadcastDeviceIds.cs" />
+    <Compile Include="..\..\src\HyperLight\Device\MotherboardLightProtocol.cs" Link="Source\Device\MotherboardLightProtocol.cs" />
+    <Compile Include="..\..\src\HyperLight\Device\NvApi.cs" Link="Source\Device\NvApi.cs" />
+    <Compile Include="..\..\src\HyperLight\Device\GpuLightProtocol.cs" Link="Source\Device\GpuLightProtocol.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+</Project>
