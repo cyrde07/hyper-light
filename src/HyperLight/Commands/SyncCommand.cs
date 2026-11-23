@@ -64,7 +64,7 @@ internal static class SyncCommand
 
             var meter = new ResourceMeter();
             // 第一次比较时让两个状态都显示出来
-            SyncStatus previous = new() { WallpaperState = "", MicState = "" };
+            SyncStatus previous = new() { WallpaperState = "", MicState = "", BoardState = "" };
             TimeSpan nextStatus = statusInterval;
             long framesAtLastStatus = 0;
             TimeSpan lastStatusTime = TimeSpan.Zero;
@@ -86,7 +86,7 @@ internal static class SyncCommand
                 }
             }
 
-            // 离开 using 时引擎停止：两个线程收尾，麦克风停止接收后会马上回到自带灯效
+            // 离开 using 时引擎停止：各个线程收尾，麦克风停止接收后会马上回到自带灯效，主板灯保持最后的颜色
         }
         finally
         {
@@ -94,7 +94,7 @@ internal static class SyncCommand
         }
 
         Console.WriteLine();
-        PrintLine(clock, "已停止同步。麦克风会马上回到它自带的灯效。");
+        PrintLine(clock, "已停止同步。麦克风会马上回到它自带的灯效，机箱灯和冷排灯保持最后的颜色。");
         return 0;
     }
 
@@ -109,6 +109,10 @@ internal static class SyncCommand
         Console.WriteLine(
             $"增强颜色：{(config.BoostColors ? $"开（{config.SaturationBoost} 倍）" : "关")}    "
             + $"取色方式：{ZoneLayoutText.Of(config.ZoneLayout)}");
+        Console.WriteLine(
+            $"麦克风：{(config.MicEnabled ? "开" : "关")}    "
+            + $"机箱灯：{BoardSetting(config.CaseEnabled, config.CaseColorSource)}    "
+            + $"冷排灯：{BoardSetting(config.RadiatorEnabled, config.RadiatorColorSource)}");
         Console.WriteLine($"配置文件：{AppConfig.DefaultPath}");
         foreach (string note in notes)
         {
@@ -140,6 +144,18 @@ internal static class SyncCommand
             PrintLine(clock, current.MicState);
         }
 
+        if (current.BoardState != previous.BoardState)
+        {
+            PrintLine(clock, $"主板：{current.BoardState}");
+        }
+
+        if (current.OpenRgbRunning != previous.OpenRgbRunning)
+        {
+            PrintLine(clock, current.OpenRgbRunning
+                ? "警告：检测到 OpenRGB 正在运行。它会和本程序同时控制主板的灯，灯可能乱变，请完全退出 OpenRGB。"
+                : "OpenRGB 已退出。");
+        }
+
         if (current.NgenuityRunning != previous.NgenuityRunning)
         {
             PrintLine(clock, current.NgenuityRunning
@@ -160,6 +176,10 @@ internal static class SyncCommand
             $"麦克风 {mic} | 截图 {status.LastCaptureMs:0.0} 毫秒 | 发送 {sendFps:0.0} 帧/秒"
             + $" | CPU {usage.CpuPercent:0.0}% | 内存 {usage.MemoryMb:0} MB");
     }
+
+    /// <summary>主板灯区的设置显示成"开（下半区）"或"关"。</summary>
+    private static string BoardSetting(bool enabled, ColorSource source) =>
+        enabled ? $"开（{ColorSourceRules.TextOf(source)}）" : "关";
 
     /// <summary>两个灯区的颜色显示成"上 色块 十六进制  下 色块 十六进制"。</summary>
     private static string ZoneSwatch(ZoneColors colors, bool colorBlocks) =>

@@ -1,5 +1,4 @@
-﻿using System.Diagnostics;
-using System.Text;
+﻿using System.Text;
 using HidSharp;
 
 namespace HyperLight.Device;
@@ -32,23 +31,9 @@ internal static class MotherboardLightDiagnostics
     private static void AppendOpenRgbCheck(StringBuilder report)
     {
         report.AppendLine("================= OpenRGB 进程检查 =================");
-        try
-        {
-            Process[] processes = Process.GetProcessesByName("OpenRGB");
-            int count = processes.Length;
-            foreach (Process process in processes)
-            {
-                process.Dispose();
-            }
-
-            report.AppendLine(count == 0
-                ? "没有在运行。"
-                : $"正在运行（{count} 个进程）。它可能同时在和芯片通信，读到的信息可能不准。请完全退出 OpenRGB 后再运行一次。");
-        }
-        catch (Exception ex)
-        {
-            report.AppendLine($"读取进程列表失败：{Describe(ex)}");
-        }
+        report.AppendLine(OpenRgbProcess.IsRunning()
+            ? "正在运行。它可能同时在和芯片通信，读到的信息可能不准。请完全退出 OpenRGB 后再运行一次。"
+            : "没有在运行。");
     }
 
     private static void AppendNodes(StringBuilder report)

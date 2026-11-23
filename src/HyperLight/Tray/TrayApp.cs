@@ -8,13 +8,14 @@ using HyperLight.Config;
 namespace HyperLight.Tray;
 
 /// <summary>
-/// 托盘程序（M4）：屏幕右下角一个小圆点图标，上下两半显示麦克风当前的两个颜色。
-/// 右键菜单：状态、暂停 / 恢复、增强颜色、取色方式、开机自启、打开设置文件、重新读取设置、退出。
+/// 托盘程序（M4）：屏幕右下角一个小圆点图标，上下两半显示当前的上、下两个颜色。
+/// 右键菜单：状态（麦克风、主板）、暂停 / 恢复、增强颜色、取色方式、
+/// 麦克风 / 机箱灯 / 冷排灯的开关和取色、开机自启、打开设置文件、重新读取设置、退出。
 /// </summary>
 /// <remarks>
 /// 界面只在主线程（界面线程）里操作。同步工作在 <see cref="SyncEngine"/> 自己的线程里进行，
 /// 界面每 0.5 秒读一次它的状态快照来刷新图标和菜单，两边不直接互相调用。
-/// 退出或暂停时停止发送，麦克风马上回到自带灯效。
+/// 退出或暂停时停止发送：麦克风马上回到自带灯效，机箱灯和冷排灯保持最后的颜色。
 /// </remarks>
 internal sealed class TrayApp : ApplicationContext
 {
@@ -29,10 +30,16 @@ internal sealed class TrayApp : ApplicationContext
     private readonly NotifyIcon notifyIcon;
     private readonly ContextMenuStrip menu;
     private readonly ToolStripMenuItem statusItem;
+    private readonly ToolStripMenuItem boardStatusItem;
     private readonly ToolStripMenuItem pauseItem;
     private readonly ToolStripMenuItem boostItem;
     private readonly ToolStripMenuItem layoutMenu;
     private readonly Dictionary<ZoneLayout, ToolStripMenuItem> layoutItems = new();
+    private readonly ToolStripMenuItem micItem;
+    private readonly ToolStripMenuItem caseItem;
+    private readonly ToolStripMenuItem radiatorItem;
+    private readonly Dictionary<ColorSource, ToolStripMenuItem> caseSourceItems = new();
+    private readonly Dictionary<ColorSource, ToolStripMenuItem> radiatorSourceItems = new();
     private readonly ToolStripMenuItem autoStartItem;
     private readonly System.Windows.Forms.Timer refreshTimer;
 
@@ -41,6 +48,7 @@ internal sealed class TrayApp : ApplicationContext
     private Icon currentIcon;
     private (ZoneColors? Colors, bool Paused) shownIconState;
     private bool ngenuityWarned;
+    private bool openRgbWarned;
     private bool exiting;
     private bool disposed;
 
@@ -75,6 +83,7 @@ internal sealed class TrayApp : ApplicationContext
         config = AppConfig.Load(AppConfig.DefaultPath, out List<string> notes);
 
         statusItem = new ToolStripMenuItem("正在启动…") { Enabled = false };
+        boardStatusItem = new ToolStripMenuItem("主板：正在启动…") { Enabled = false };
         pauseItem = new ToolStripMenuItem("暂停同步", null, (_, _) => TogglePause());
         boostItem = new ToolStripMenuItem("增强颜色（模仿 Wallpaper Engine）", null, (_, _) => ToggleBoost());
         layoutMenu = new ToolStripMenuItem("取色方式");
@@ -84,16 +93,32 @@ internal sealed class TrayApp : ApplicationContext
             layoutItems[layout] = item;
             layoutMenu.DropDownItems.Add(item);
         }
+        micItem = new ToolStripMenuItem("麦克风", null, (_, _) => ApplyConfig(config with { MicEnabled = !config.MicEnabled }));
+        caseItem = new ToolStripMenuItem("机箱灯", null, (_, _) => ApplyConfig(config with { CaseEnabled = !config.CaseEnabled }));
+        radiatorItem = new ToolStripMenuItem("冷排灯", null, (_, _) => ApplyConfig(config with { RadiatorEnabled = !config.RadiatorEnabled }));
+        ToolStripMenuItem caseSourceMenu = BuildSourceMenu(
+            "机箱灯取色", caseSourceItems, source => config.CaseColorSource != source,
+            source => config with { CaseColorSource = source });
+        ToolStripMenuItem radiatorSourceMenu = BuildSourceMenu(
+            "冷排灯取色", radiatorSourceItems, source => config.RadiatorColorSource != source,
+            source => config with { RadiatorColorSource = source });
         autoStartItem = new ToolStripMenuItem("开机自启", null, (_, _) => ToggleAutoStart());
 
         menu = new ContextMenuStrip();
         menu.Items.AddRange(new ToolStripItem[]
         {
             statusItem,
+            boardStatusItem,
             new ToolStripSeparator(),
             pauseItem,
             boostItem,
             layoutMenu,
+            new ToolStripSeparator(),
+            micItem,
+            caseItem,
+            caseSourceMenu,
+            radiatorItem,
+            radiatorSourceMenu,
             new ToolStripSeparator(),
             autoStartItem,
             new ToolStripMenuItem("打开设置文件", null, (_, _) => OpenConfigFile()),
@@ -140,8 +165,9 @@ internal sealed class TrayApp : ApplicationContext
     private void RefreshFromEngine()
     {
         SyncStatus status = engine.Status;
-        string state = DescribeState(status);
+        string state = DescribeState(status, config.MicEnabled);
         statusItem.Text = state;
+        boardStatusItem.Text = $"主板：{status.BoardState}";
         pauseItem.Text = status.Paused ? "恢复同步" : "暂停同步";
 
         string tooltip = Truncate($"HyperLight：{state}", maxTooltipLength);
@@ -171,19 +197,35 @@ internal sealed class TrayApp : ApplicationContext
         {
             ngenuityWarned = false;
         }
+
+        // OpenRGB 同理：它会和本程序抢主板灯光芯片
+        if (status.OpenRgbRunning && !openRgbWarned)
+        {
+            ShowBalloon("检测到 OpenRGB 正在运行。它会和本程序同时控制主板的灯，灯可能乱变，请完全退出 OpenRGB。", ToolTipIcon.Warning);
+            openRgbWarned = true;
+        }
+        else if (!status.OpenRgbRunning)
+        {
+            openRgbWarned = false;
+        }
     }
 
     /// <summary>把引擎状态变成一句话（菜单第一行和图标提示文字）。</summary>
-    private static string DescribeState(SyncStatus status)
+    private static string DescribeState(SyncStatus status, bool micEnabled)
     {
         if (status.Paused)
         {
-            return "已暂停（麦克风显示自带灯效）";
+            return "已暂停（麦克风显示自带灯效，机箱灯和冷排灯保持当前颜色）";
         }
 
         if (status.Target is not ZoneColors target)
         {
             return status.LastError ?? status.WallpaperState;
+        }
+
+        if (!micEnabled)
+        {
+            return $"同步中：{target}（麦克风已关闭）";
         }
 
         return status.MicConnected ? $"同步中：{target}" : status.MicState;
@@ -196,7 +238,48 @@ internal sealed class TrayApp : ApplicationContext
         {
             item.Checked = layout == config.ZoneLayout;
         }
+
+        micItem.Checked = config.MicEnabled;
+        caseItem.Checked = config.CaseEnabled;
+        radiatorItem.Checked = config.RadiatorEnabled;
+        foreach ((ColorSource source, ToolStripMenuItem item) in caseSourceItems)
+        {
+            item.Checked = source == config.CaseColorSource;
+        }
+
+        foreach ((ColorSource source, ToolStripMenuItem item) in radiatorSourceItems)
+        {
+            item.Checked = source == config.RadiatorColorSource;
+        }
+
         autoStartItem.Checked = IsAutoStartEnabledSafe();
+    }
+
+    /// <summary>
+    /// 生成一个取色子菜单（上半区 / 下半区 / 上下平均）。机箱灯和冷排灯共用这个写法。
+    /// <paramref name="isChange"/> 判断点的是不是和现在不同的选项；<paramref name="withSource"/> 生成改好的新设置。
+    /// </summary>
+    private ToolStripMenuItem BuildSourceMenu(
+        string title,
+        Dictionary<ColorSource, ToolStripMenuItem> items,
+        Func<ColorSource, bool> isChange,
+        Func<ColorSource, AppConfig> withSource)
+    {
+        var sourceMenu = new ToolStripMenuItem(title);
+        foreach (ColorSource source in ColorSourceRules.All)
+        {
+            var item = new ToolStripMenuItem(ColorSourceRules.TextOf(source), null, (_, _) =>
+            {
+                if (isChange(source))
+                {
+                    ApplyConfig(withSource(source));
+                }
+            });
+            items[source] = item;
+            sourceMenu.DropDownItems.Add(item);
+        }
+
+        return sourceMenu;
     }
 
     // ───────────────────────── 菜单操作 ─────────────────────────
@@ -292,7 +375,7 @@ internal sealed class TrayApp : ApplicationContext
         return newEngine;
     }
 
-    /// <summary>用当前设置重启同步引擎，保持原来的暂停状态。重启时麦克风可能会闪一下自带灯效。</summary>
+    /// <summary>用当前设置重启同步引擎，保持原来的暂停状态。重启时麦克风可能会闪一下自带灯效，主板灯会把颜色重发一次。</summary>
     private void RestartEngine()
     {
         bool wasPaused = engine.Paused;
@@ -303,7 +386,7 @@ internal sealed class TrayApp : ApplicationContext
 
     // ───────────────────────── 退出 ─────────────────────────
 
-    /// <summary>点「退出」时：停止同步（麦克风马上回到自带灯效），去掉托盘图标。</summary>
+    /// <summary>点「退出」时：停止同步（麦克风马上回到自带灯效，主板灯保持最后的颜色），去掉托盘图标。</summary>
     protected override void ExitThreadCore()
     {
         if (!exiting)

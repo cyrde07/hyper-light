@@ -7,6 +7,7 @@ namespace HyperLight.Commands;
 ///   board                        读取芯片信息（M5-0，不改灯光）
 ///   board color 机箱色 [冷排色]   设成固定颜色（M5-1）
 ///   board count                  把灯分段上色，用来数灯珠（M5-1）
+///   board range 起 止             冷排只点亮第"起"到第"止"颗灯（白色），用来找灯珠一共有多少颗
 /// color 和 count 发一次就停，然后等用户按回车：用来观察程序停发后，灯能不能保持颜色。
 /// </summary>
 internal static class BoardCommand
@@ -19,6 +20,8 @@ internal static class BoardCommand
         "         把机箱灯和冷排灯设成固定颜色。只写一个颜色时两边相同。例子：board color FF0000 0000FF",
         "  board count [--apply]",
         "         把灯每 4 颗一段，按 红 绿 蓝 黄 青 紫 循环上色，拍照用来数灯珠",
+        "  board range <从第几颗> <到第几颗>",
+        "         冷排只点亮这一段灯（白色），其他全黑；机箱灯不变。例子：board range 1 64",
         "         --apply  发完颜色后再发一个\"生效\"指令（测试需不需要它）",
     };
 
@@ -55,6 +58,7 @@ internal static class BoardCommand
         {
             "color" => RunColor(values, apply),
             "count" when values.Length == 0 => RunCount(apply),
+            "range" => RunRange(values),
             _ => PrintUsage($"看不懂的参数：{string.Join(" ", args)}"),
         };
     }
@@ -97,13 +101,37 @@ internal static class BoardCommand
         return SendOnceAndWait(leds, leds, apply);
     }
 
-    /// <summary>发一次颜色，然后等用户按回车再退出（期间不再发送）。</summary>
-    private static int SendOnceAndWait(Rgb[] caseLeds, Rgb[] radiatorLeds, bool apply)
+    private static int RunRange(string[] values)
+    {
+        int max = MotherboardLightProtocol.MaxLedsPerZone;
+        if (values.Length != 2
+            || !int.TryParse(values[0], out int first)
+            || !int.TryParse(values[1], out int last)
+            || first < 1 || last > max || first > last)
+        {
+            return PrintUsage($"range 后面要写两个数：从第几颗到第几颗（1～{max}，前一个不能比后一个大）。");
+        }
+
+        // 用户说的"第 1 颗"是列表里的第 0 个
+        Rgb white = new(255, 255, 255);
+        Rgb[] leds = Enumerable.Range(0, max)
+            .Select(index => index >= first - 1 && index <= last - 1 ? white : default)
+            .ToArray();
+
+        Console.WriteLine($"冷排只点亮第 {first}～{last} 颗灯（白色），其他全黑。机箱灯不变。");
+        Console.WriteLine("请看亮的是冷排的哪一部分（哪个风扇的哪几块、侧面灯条有没有亮）。");
+        return SendOnceAndWait(null, leds, apply: false);
+    }
+
+    /// <summary>
+    /// 发一次颜色，然后等用户按回车再退出（期间不再发送）。
+    /// <paramref name="caseLeds"/> 为 null 时不改机箱灯。
+    /// </summary>
+    private static int SendOnceAndWait(Rgb[]? caseLeds, Rgb[] radiatorLeds, bool apply)
     {
         using var light = new MotherboardLight();
 
-        SendResult caseResult = light.SendZone(MotherboardLightZone.Case, caseLeds);
-        if (caseResult != SendResult.Sent)
+        if (caseLeds is not null && light.SendZone(MotherboardLightZone.Case, caseLeds) != SendResult.Sent)
         {
             Console.WriteLine($"发送失败：{light.LastError ?? "原因未知"}");
             Console.WriteLine("请先完全退出 OpenRGB，再运行一次。");
@@ -114,6 +142,7 @@ internal static class BoardCommand
         if (radiatorResult != SendResult.Sent)
         {
             Console.WriteLine($"冷排发送失败：{light.LastError ?? "原因未知"}");
+            Console.WriteLine("请先完全退出 OpenRGB，再运行一次。");
             return 1;
         }
 

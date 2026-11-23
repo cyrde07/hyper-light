@@ -37,6 +37,15 @@ internal sealed record SyncStatus
     /// <summary>NGENUITY 是否在运行。</summary>
     public bool NgenuityRunning { get; init; }
 
+    /// <summary>主板灯（机箱灯、冷排灯）这一侧的状态。</summary>
+    public string BoardState { get; init; } = "等待第一次截图…";
+
+    /// <summary>最近一次给主板发送是否成功（主板灯光芯片已连上）。</summary>
+    public bool BoardConnected { get; init; }
+
+    /// <summary>OpenRGB 是否在运行。</summary>
+    public bool OpenRgbRunning { get; init; }
+
     /// <summary>是否已暂停。</summary>
     public bool Paused { get; init; }
 
@@ -45,18 +54,21 @@ internal sealed record SyncStatus
 }
 
 /// <summary>
-/// 同步引擎：截壁纸 → 算两个灯区的平均色 → 增强颜色 → 变化过滤 → 持续发给麦克风。
-/// 两个线程：
+/// 同步引擎：截壁纸 → 算两个灯区的平均色 → 增强颜色 → 变化过滤 → 发给麦克风和主板灯。
+/// 三个线程：
 ///   截图线程：每隔 CaptureIntervalMs 截一次壁纸，算颜色，交给两个 <see cref="ColorChangeFilter"/>（上、下灯区各一个）。
 ///   发送线程：每隔 SendIntervalMs 把"此刻应该显示的颜色"发给麦克风。
 ///             麦克风一停止接收就会恢复自带灯效，所以这个线程不能被截图卡住，两件事必须分开。
-/// 找不到壁纸超过 WallpaperLostGraceMs，或者暂停时，停止发送，让麦克风回到自带灯效。
+///   主板线程：同样每隔 SendIntervalMs 看一次颜色，但只在颜色变了时才发给主板（机箱灯、冷排灯）。
+///             M5-1 实测主板停止接收后会保持颜色，所以不用一直发；
+///             主板每次要发很多个包（比麦克风慢），单独一个线程，不会拖慢麦克风。
+/// 找不到壁纸超过 WallpaperLostGraceMs，或者暂停时，麦克风停止发送、回到自带灯效；主板灯保持最后的颜色。
 /// sync 命令和托盘程序都使用它。
 /// </summary>
 internal sealed class SyncEngine : IDisposable
 {
-    /// <summary>多久查一次 NGENUITY。查进程列表会产生不少临时数据，没必要太频繁。</summary>
-    private static readonly TimeSpan ngenuityCheckInterval = TimeSpan.FromSeconds(10);
+    /// <summary>多久查一次 NGENUITY 和 OpenRGB。查进程列表会产生不少临时数据，没必要太频繁。</summary>
+    private static readonly TimeSpan rivalCheckInterval = TimeSpan.FromSeconds(10);
 
     /// <summary>截图或发送耽误超过这个时间，就记进卡顿记录。</summary>
     private static readonly TimeSpan stallThreshold = TimeSpan.FromMilliseconds(300);
@@ -64,7 +76,7 @@ internal sealed class SyncEngine : IDisposable
     /// <summary>颜色变化超过这个值（0～255），就当作"突变"记下来（多半是换了壁纸）。</summary>
     private const int bigColorJump = 60;
 
-    /// <summary>停止时最多等两个线程收尾多久。</summary>
+    /// <summary>停止时最多等每个线程收尾多久。</summary>
     private static readonly TimeSpan stopTimeout = TimeSpan.FromSeconds(5);
 
     private readonly AppConfig config;
@@ -77,6 +89,7 @@ internal sealed class SyncEngine : IDisposable
     private SyncStatus status = new();
     private Thread? captureThread;
     private Thread? sendThread;
+    private Thread? boardThread;
     private volatile bool paused;
     private bool disposed;
 
@@ -84,6 +97,7 @@ internal sealed class SyncEngine : IDisposable
     private IntPtr loggedWallpaperWindow;   // 只在截图线程里用
     private bool loggedWallpaperMissing;    // 只在截图线程里用
     private bool micConnectedBefore;        // 只在发送线程里用
+    private bool boardConnectedBefore;      // 只在主板线程里用
 
     public SyncEngine(AppConfig config)
     {
@@ -106,7 +120,7 @@ internal sealed class SyncEngine : IDisposable
     }
 
     /// <summary>
-    /// 暂停 / 恢复。暂停时不截图、不发送，麦克风马上回到自带灯效；恢复后接着同步。任何线程都可以设置。
+    /// 暂停 / 恢复。暂停时不截图、不发送：麦克风马上回到自带灯效，主板灯保持当前颜色；恢复后接着同步。任何线程都可以设置。
     /// </summary>
     public bool Paused
     {
@@ -118,7 +132,7 @@ internal sealed class SyncEngine : IDisposable
         }
     }
 
-    /// <summary>启动两个线程。只能调用一次。</summary>
+    /// <summary>启动三个线程。只能调用一次。</summary>
     public void Start()
     {
         ObjectDisposedException.ThrowIf(disposed, this);
@@ -128,12 +142,13 @@ internal sealed class SyncEngine : IDisposable
         }
 
         clock.Start();
-        StallLog.Write("启动", $"开始同步（截图间隔 {config.CaptureIntervalMs} 毫秒，取色方式 {ZoneLayoutText.Of(config.ZoneLayout)}）");
+        StallLog.Write("启动", $"开始同步（截图间隔 {config.CaptureIntervalMs} 毫秒，取色方式 {ZoneLayoutText.Of(config.ZoneLayout)}，{DescribeDevices()}）");
         captureThread = StartBackgroundThread(CaptureLoop, "HyperLight 截图线程");
         sendThread = StartBackgroundThread(SendLoop, "HyperLight 发送线程");
+        boardThread = StartBackgroundThread(BoardLoop, "HyperLight 主板线程");
     }
 
-    /// <summary>停止同步。两个线程会各自关闭麦克风连接、释放截图内存。</summary>
+    /// <summary>停止同步。各个线程会各自关闭麦克风和主板的连接、释放截图内存。主板灯保持最后的颜色。</summary>
     public void Dispose()
     {
         if (disposed)
@@ -148,7 +163,8 @@ internal sealed class SyncEngine : IDisposable
         // 它是后台线程，程序退出时会被系统回收。这种情况下不能释放 stopping，线程还在用它。
         bool captureStopped = captureThread?.Join(stopTimeout) ?? true;
         bool sendStopped = sendThread?.Join(stopTimeout) ?? true;
-        if (captureStopped && sendStopped)
+        bool boardStopped = boardThread?.Join(stopTimeout) ?? true;
+        if (captureStopped && sendStopped && boardStopped)
         {
             stopping.Dispose();
         }
@@ -163,7 +179,7 @@ internal sealed class SyncEngine : IDisposable
         using var capturer = new WallpaperCapturer();
         WallpaperTarget? target = null;
         TimeSpan lastSuccess = TimeSpan.Zero;
-        TimeSpan nextNgenuityCheck = TimeSpan.Zero;
+        TimeSpan nextRivalCheck = TimeSpan.Zero;
 
         while (!stopping.IsCancellationRequested)
         {
@@ -172,18 +188,19 @@ internal sealed class SyncEngine : IDisposable
             {
                 if (paused)
                 {
-                    // 暂停时什么都不做（不截图、不查 NGENUITY）；
+                    // 暂停时什么都不做（不截图、不查 NGENUITY 和 OpenRGB）；
                     // 把"上次成功"挪到现在，免得恢复的瞬间被当成"很久没找到壁纸"
                     lastSuccess = clock.Elapsed;
                     UpdateStatus(s => s with { WallpaperState = "已暂停" });
                 }
                 else
                 {
-                    if (roundStart >= nextNgenuityCheck)
+                    if (roundStart >= nextRivalCheck)
                     {
-                        nextNgenuityCheck = roundStart + ngenuityCheckInterval;
-                        bool running = NgenuityProcess.IsRunning();
-                        UpdateStatus(s => s with { NgenuityRunning = running });
+                        nextRivalCheck = roundStart + rivalCheckInterval;
+                        bool ngenuity = config.MicEnabled && NgenuityProcess.IsRunning();
+                        bool openRgb = OpenRgbProcess.IsRunning();
+                        UpdateStatus(s => s with { NgenuityRunning = ngenuity, OpenRgbRunning = openRgb });
                     }
 
                     TimeSpan captureRoundStart = clock.Elapsed;
@@ -383,6 +400,12 @@ internal sealed class SyncEngine : IDisposable
 
     private void SendOnce(QuadcastMic mic)
     {
+        if (!config.MicEnabled)
+        {
+            UpdateStatus(s => s with { MicState = "麦克风同步已关闭，显示自带灯效", MicConnected = false });
+            return;
+        }
+
         if (paused)
         {
             UpdateStatus(s => s with { MicState = "已暂停，麦克风显示自带灯效" });
@@ -421,7 +444,140 @@ internal sealed class SyncEngine : IDisposable
         UpdateStatus(s => s with { MicState = micState, MicConnected = connected, FramesSent = s.FramesSent + (connected ? 1 : 0) });
     }
 
+    // ───────────────────────── 主板线程 ─────────────────────────
+
+    /// <summary>一个要同步的主板灯区，以及它的取色来源和灯珠数。</summary>
+    private readonly record struct BoardZoneSetting(MotherboardLightZone Zone, ColorSource Source, int LedCount);
+
+    /// <summary>按配置列出打开了同步的主板灯区。配置和灯区的对应关系只写在这里。</summary>
+    private List<BoardZoneSetting> EnabledBoardZones()
+    {
+        var zones = new List<BoardZoneSetting>();
+        if (config.CaseEnabled)
+        {
+            zones.Add(new BoardZoneSetting(MotherboardLightZone.Case, config.CaseColorSource, config.CaseLedCount));
+        }
+
+        if (config.RadiatorEnabled)
+        {
+            zones.Add(new BoardZoneSetting(MotherboardLightZone.Radiator, config.RadiatorColorSource, config.RadiatorLedCount));
+        }
+
+        return zones;
+    }
+
+    private void BoardLoop()
+    {
+        List<BoardZoneSetting> zones = EnabledBoardZones();
+        if (zones.Count == 0)
+        {
+            // 两个灯区都关了：不连主板，灯保持原样
+            UpdateStatus(s => s with { BoardState = "机箱灯和冷排灯都没有打开同步" });
+            return;
+        }
+
+        var interval = TimeSpan.FromMilliseconds(config.SendIntervalMs);
+        using var board = new MotherboardLight();
+
+        // 每个灯区最后一次成功发出的颜色。颜色没变就不发；连接出问题时清空，重新连上后全部重发
+        var lastSent = new Dictionary<MotherboardLightZone, Rgb>();
+
+        while (!stopping.IsCancellationRequested)
+        {
+            TimeSpan roundStart = clock.Elapsed;
+            try
+            {
+                SendBoardOnce(board, zones, lastSent);
+            }
+            catch (Exception ex)
+            {
+                // 线程最外层：任何意外都不能让程序崩溃。记下原因，下一轮全部重发
+                lastSent.Clear();
+                UpdateStatus(s => s with { LastError = $"主板发送出错：{ex.GetType().Name}：{ex.Message}" });
+            }
+
+            WaitUntil(roundStart + interval);
+        }
+    }
+
+    private void SendBoardOnce(MotherboardLight board, List<BoardZoneSetting> zones, Dictionary<MotherboardLightZone, Rgb> lastSent)
+    {
+        if (paused)
+        {
+            UpdateStatus(s => s with { BoardState = "已暂停，机箱灯和冷排灯保持当前颜色" });
+            return;
+        }
+
+        TimeSpan now = clock.Elapsed;
+        if (upperFilter.Current(now) is not Rgb upper || lowerFilter.Current(now) is not Rgb lower)
+        {
+            UpdateStatus(s => s with { BoardState = "没有颜色可发，机箱灯和冷排灯保持当前颜色" });
+            return;
+        }
+
+        var colors = new ZoneColors(upper, lower);
+        SendResult result = SendResult.Sent;
+        foreach (BoardZoneSetting setting in zones)
+        {
+            Rgb color = ColorSourceRules.Pick(colors, setting.Source);
+            if (lastSent.TryGetValue(setting.Zone, out Rgb sent) && sent == color)
+            {
+                continue;
+            }
+
+            TimeSpan sendStart = clock.Elapsed;
+            result = board.SendZone(setting.Zone, Enumerable.Repeat(color, setting.LedCount).ToArray());
+            TimeSpan took = clock.Elapsed - sendStart;
+            if (took > stallThreshold)
+            {
+                StallLog.Write("主板", $"给主板发颜色很慢：{took.TotalMilliseconds:0} 毫秒");
+            }
+
+            if (result != SendResult.Sent)
+            {
+                // 连接出问题：全部作废，重新连上后每个灯区都重发
+                lastSent.Clear();
+                break;
+            }
+
+            lastSent[setting.Zone] = color;
+        }
+
+        string boardState = result switch
+        {
+            SendResult.Sent => "主板已连接，机箱灯和冷排灯正在同步",
+            SendResult.NotConnected => $"等待主板灯光芯片：{board.LastError}（每秒自动重试）",
+            _ => $"主板断开：{board.LastError}（会自动重连）",
+        };
+        bool connected = result == SendResult.Sent;
+        if (result == SendResult.Failed)
+        {
+            StallLog.Write("主板", $"主板断开：{board.LastError}");
+        }
+        else if (connected && !boardConnectedBefore)
+        {
+            StallLog.Write("主板", "主板灯光芯片已连上");
+        }
+
+        if (result != SendResult.NotConnected)
+        {
+            boardConnectedBefore = connected;
+        }
+
+        UpdateStatus(s => s with { BoardState = boardState, BoardConnected = connected });
+    }
+
     // ───────────────────────── 小工具 ─────────────────────────
+
+    /// <summary>启动日志里的设备设置，比如"麦克风 开，机箱灯 开（下半区），冷排灯 关"。</summary>
+    private string DescribeDevices()
+    {
+        static string OnOff(bool enabled) => enabled ? "开" : "关";
+        string Board(bool enabled, ColorSource source) =>
+            enabled ? $"开（{ColorSourceRules.TextOf(source)}）" : "关";
+
+        return $"麦克风 {OnOff(config.MicEnabled)}，机箱灯 {Board(config.CaseEnabled, config.CaseColorSource)}，冷排灯 {Board(config.RadiatorEnabled, config.RadiatorColorSource)}";
+    }
 
     private void UpdateStatus(Func<SyncStatus, SyncStatus> change)
     {

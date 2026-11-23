@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using HyperLight.ColorProcessing;
+using HyperLight.Device;
 
 namespace HyperLight.Config;
 
@@ -43,6 +44,27 @@ internal sealed record AppConfig
 
     [Description("取色方式：topBottom 上下（上半张→上灯区，下半张→下灯区）；leftRight 左右（左半张→上灯区，右半张→下灯区）；whole 整张壁纸（两个灯区同色）。默认 topBottom")]
     public ZoneLayout ZoneLayout { get; init; } = ZoneLayout.TopBottom;
+
+    [Description("麦克风：true 跟着壁纸变色；false 不控制，麦克风显示自带灯效。默认 true")]
+    public bool MicEnabled { get; init; } = true;
+
+    [Description("机箱灯（主板 ARGB_V2_1 上的机箱风扇和灯条）：true 跟着壁纸变色；false 不再改变，停在最后的颜色。默认 true")]
+    public bool CaseEnabled { get; init; } = true;
+
+    [Description("冷排灯（主板 ARGB_V2_2 上的水冷）：true 跟着壁纸变色；false 不再改变，停在最后的颜色。默认 true")]
+    public bool RadiatorEnabled { get; init; } = true;
+
+    [Description("机箱灯取色：upper 上半区（用上灯区的颜色）；lower 下半区；average 上下平均。默认 lower")]
+    public ColorSource CaseColorSource { get; init; } = ColorSource.Lower;
+
+    [Description("冷排灯取色：upper 上半区（用上灯区的颜色）；lower 下半区；average 上下平均。默认 upper（冷排在机箱顶部）")]
+    public ColorSource RadiatorColorSource { get; init; } = ColorSource.Upper;
+
+    [Description("机箱灯的灯珠数：发颜色时发给多少颗灯。数多了没关系，数少了后面的灯不会变色。默认 256（主板接口的上限）。范围 1～256")]
+    public int CaseLedCount { get; init; } = 256;
+
+    [Description("冷排灯的灯珠数：发颜色时发给多少颗灯。数多了没关系，数少了后面的灯不会变色。默认 256（主板接口的上限）。范围 1～256")]
+    public int RadiatorLedCount { get; init; } = 256;
 
     /// <summary>配置文件的位置：exe 旁边的 hyperlight.json。</summary>
     public static string DefaultPath => Path.Combine(AppContext.BaseDirectory, "hyperlight.json");
@@ -122,7 +144,7 @@ internal sealed record AppConfig
         }
     }
 
-    /// <summary>把每一项的数值检查一遍，超出范围的改回默认值。开关（true / false）和取色方式（读取时已检查）不需要再检查。</summary>
+    /// <summary>把每一项的数值检查一遍，超出范围的改回默认值。开关（true / false）和取色方式、取色来源（读取时已检查）不需要再检查。</summary>
     private AppConfig Validated(List<string> notes)
     {
         var defaults = new AppConfig();
@@ -135,6 +157,8 @@ internal sealed record AppConfig
             ConfirmCaptures = InRange(nameof(ConfirmCaptures), ConfirmCaptures, 1, 5, defaults.ConfirmCaptures, notes),
             WallpaperLostGraceMs = InRange(nameof(WallpaperLostGraceMs), WallpaperLostGraceMs, 0, 60_000, defaults.WallpaperLostGraceMs, notes),
             SaturationBoost = InRange(nameof(SaturationBoost), SaturationBoost, 1.0, 3.0, defaults.SaturationBoost, notes),
+            CaseLedCount = InRange(nameof(CaseLedCount), CaseLedCount, 1, MotherboardLightProtocol.MaxLedsPerZone, defaults.CaseLedCount, notes),
+            RadiatorLedCount = InRange(nameof(RadiatorLedCount), RadiatorLedCount, 1, MotherboardLightProtocol.MaxLedsPerZone, defaults.RadiatorLedCount, notes),
         };
     }
 
