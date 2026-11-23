@@ -107,6 +107,7 @@ internal sealed class SyncEngine : IDisposable
     private bool loggedWallpaperMissing;    // 只在截图线程里用
     private bool micConnectedBefore;        // 只在发送线程里用
     private bool boardConnectedBefore;      // 只在主板线程里用
+    private string? loggedBoardError;       // 只在主板线程里用
 
     public SyncEngine(AppConfig config)
     {
@@ -567,7 +568,15 @@ internal sealed class SyncEngine : IDisposable
             {
                 // 线程最外层：任何意外都不能让程序崩溃。记下原因，下一轮全部重发
                 lastSent.Clear();
-                UpdateStatus(s => s with { LastError = $"主板发送出错：{ex.GetType().Name}：{ex.Message}" });
+                string error = $"主板发送出错：{ex.GetType().Name}：{ex.Message}";
+                UpdateStatus(s => s with { LastError = error });
+
+                // 自由选色时状态栏不显示这个错误，所以一定要记进日志（同样的错误只记一次，免得刷屏）
+                if (error != loggedBoardError)
+                {
+                    StallLog.Write("主板", $"{error}\n{ex.StackTrace}");
+                    loggedBoardError = error;
+                }
             }
 
             WaitUntil(roundStart + interval);
@@ -660,11 +669,19 @@ internal sealed class SyncEngine : IDisposable
             return SendResult.Sent;
         }
 
+        bool firstSinceConnect = lastSent.Onboard is null;
         SendResult result = board.SendOnboard(new[]
         {
             (MotherboardOnboardLight.IoCoverTop, color),
             (MotherboardOnboardLight.IoCoverBottom, color),
         });
+
+        // 每次连上（或重启同步）后第一次发主板灯、以及发送失败时，记进日志，方便排查"主板灯不变色"
+        if (firstSinceConnect || result != SendResult.Sent)
+        {
+            StallLog.Write("主板", $"主板灯：发送 {color}，结果 {result}{(result == SendResult.Sent ? "" : $"（{board.LastError}）")}");
+        }
+
         if (result == SendResult.Sent)
         {
             lastSent.Onboard = color;
