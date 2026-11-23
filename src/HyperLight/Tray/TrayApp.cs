@@ -172,12 +172,15 @@ internal sealed class TrayApp : ApplicationContext
             onboardSourceMenu,
             new ToolStripSeparator(),
             autoStartItem,
-            new ToolStripMenuItem("打开设置文件", null, (_, _) => OpenConfigFile()),
-            new ToolStripMenuItem("重新读取设置", null, (_, _) => ReloadConfig()),
+            new ToolStripMenuItem("打开设置文件", null, CloseAfter(OpenConfigFile)),
+            new ToolStripMenuItem("重新读取设置", null, CloseAfter(ReloadConfig)),
             new ToolStripSeparator(),
-            new ToolStripMenuItem("退出", null, (_, _) => ExitThread()),
+            new ToolStripMenuItem("退出", null, CloseAfter(ExitThread)),
         });
         AttachKeepOpen(menu);
+
+        // 每次打开菜单都从"点了就关"开始
+        menu.Opening += (_, _) => keepMenuOpen = false;
 
         currentIcon = TrayIconPainter.Paint(null, paused: false);
         shownIconState = (null, false);
@@ -347,13 +350,21 @@ internal sealed class TrayApp : ApplicationContext
     /// 包装开关、多选一选项的点击动作：点完以后菜单不关，勾选马上更新，可以接着改别的。
     /// 「打开设置文件」「重新读取设置」「退出」这些不用它，点完照常关闭菜单。
     /// </summary>
+    /// <remarks>
+    /// 标记不在点击处理完后自动清掉：改设置时要等同步线程停下，等待期间 Windows 会处理排队的消息，
+    /// 如果用排队的方式清标记，会在菜单关闭之前就被清掉。所以改成在打开菜单时、点"会关闭菜单的选项"时清。
+    /// </remarks>
     private EventHandler KeepOpen(Action action) => (_, _) =>
     {
         keepMenuOpen = true;
         action();
+    };
 
-        // 菜单在这次点击处理的最后才关闭。等这次点击全部处理完，再恢复成"点了就关"
-        menu.BeginInvoke(() => keepMenuOpen = false);
+    /// <summary>包装「打开设置文件」「重新读取设置」「退出」这类选项：点完照常关闭菜单。</summary>
+    private EventHandler CloseAfter(Action action) => (_, _) =>
+    {
+        keepMenuOpen = false;
+        action();
     };
 
     /// <summary>给菜单和它所有的子菜单挂上"点了开关不关闭"的处理。</summary>
