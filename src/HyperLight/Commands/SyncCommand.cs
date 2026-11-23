@@ -94,7 +94,7 @@ internal static class SyncCommand
         }
 
         Console.WriteLine();
-        PrintLine(clock, "已停止同步。麦克风会马上回到它自带的灯效，机箱灯和冷排灯保持最后的颜色。");
+        PrintLine(clock, "已停止同步。麦克风会马上回到它自带的灯效，主板上的灯保持最后的颜色。");
         return 0;
     }
 
@@ -113,7 +113,8 @@ internal static class SyncCommand
             $"麦克风：{(config.MicEnabled ? "开" : "关")}    "
             + $"机箱灯：{SyncEngine.DescribeBoardZone(config.CaseEnabled, config.CaseColorSource, config.CaseEffect)}    "
             + $"冷排灯：{SyncEngine.DescribeBoardZone(config.RadiatorEnabled, config.RadiatorColorSource, config.RadiatorEffect)}    "
-            + $"加大差异：{(config.TwoColorSpread == 0 ? "关" : config.TwoColorSpread.ToString())}");
+            + $"加大差异：{(config.TwoColorSpread == 0 ? "关" : config.TwoColorSpread.ToString())}    "
+            + $"主板灯：{SyncEngine.DescribeOnboard(config.OnboardEnabled, config.OnboardColorSource)}");
         Console.WriteLine($"配置文件：{AppConfig.DefaultPath}");
         foreach (string note in notes)
         {

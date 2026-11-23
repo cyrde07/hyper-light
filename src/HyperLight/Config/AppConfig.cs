@@ -54,6 +54,12 @@ internal sealed record AppConfig
     [Description("冷排灯（主板 ARGB_V2_2 上的水冷）：true 跟着壁纸变色；false 不再改变，停在最后的颜色。默认 true")]
     public bool RadiatorEnabled { get; init; } = true;
 
+    [Description("主板灯（主板上的 AORUS 字）：true 跟着壁纸变色；false 不再改变，停在最后的颜色。默认 true")]
+    public bool OnboardEnabled { get; init; } = true;
+
+    [Description("主板灯取色：upper 上半区；lower 下半区；left 左半区；right 右半区；average 整张。默认 average")]
+    public ColorSource OnboardColorSource { get; init; } = ColorSource.Average;
+
     [Description("机箱灯取色（灯效是单色时用）：upper 上半区；lower 下半区；left 左半区；right 右半区；average 整张。默认 lower")]
     public ColorSource CaseColorSource { get; init; } = ColorSource.Lower;
 

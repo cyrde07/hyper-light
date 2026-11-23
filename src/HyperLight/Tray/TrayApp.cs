@@ -10,13 +10,13 @@ namespace HyperLight.Tray;
 /// <summary>
 /// 托盘程序（M4）：屏幕右下角一个小圆点图标，上下两半显示当前的上、下两个颜色。
 /// 右键菜单：状态（麦克风、主板）、暂停 / 恢复、增强颜色、取色方式、
-/// 麦克风 / 机箱灯 / 冷排灯的开关，机箱灯和冷排灯的取色和灯效、加大差异（滑动条）、
+/// 麦克风 / 机箱灯 / 冷排灯 / 主板灯的开关，机箱灯和冷排灯的取色和灯效、加大差异（滑动条）、主板灯的取色、
 /// 开机自启、打开设置文件、重新读取设置、退出。
 /// </summary>
 /// <remarks>
 /// 界面只在主线程（界面线程）里操作。同步工作在 <see cref="SyncEngine"/> 自己的线程里进行，
 /// 界面每 0.5 秒读一次它的状态快照来刷新图标和菜单，两边不直接互相调用。
-/// 退出或暂停时停止发送：麦克风马上回到自带灯效，机箱灯和冷排灯保持最后的颜色。
+/// 退出或暂停时停止发送：麦克风马上回到自带灯效，主板上的灯（机箱灯、冷排灯、主板灯）保持最后的颜色。
 /// </remarks>
 internal sealed class TrayApp : ApplicationContext
 {
@@ -48,6 +48,8 @@ internal sealed class TrayApp : ApplicationContext
     private readonly Dictionary<ColorSource, ToolStripMenuItem> radiatorSourceItems = new();
     private readonly Dictionary<LightEffect, ToolStripMenuItem> caseEffectItems = new();
     private readonly Dictionary<LightEffect, ToolStripMenuItem> radiatorEffectItems = new();
+    private readonly ToolStripMenuItem onboardItem;
+    private readonly Dictionary<ColorSource, ToolStripMenuItem> onboardSourceItems = new();
     private readonly ToolStripMenuItem spreadLabel;
     private readonly TrackBar spreadSlider;
     private readonly System.Windows.Forms.Timer spreadApplyTimer;
@@ -125,6 +127,10 @@ internal sealed class TrayApp : ApplicationContext
         ToolStripMenuItem radiatorEffectMenu = BuildChoiceMenu(
             "冷排灯灯效", LightEffectRules.All, LightEffectRules.TextOf, radiatorEffectItems,
             effect => config.RadiatorEffect != effect, effect => config with { RadiatorEffect = effect });
+        onboardItem = new ToolStripMenuItem("主板灯", null, KeepOpen(() => ApplyConfig(config with { OnboardEnabled = !config.OnboardEnabled })));
+        ToolStripMenuItem onboardSourceMenu = BuildChoiceMenu(
+            "主板灯取色", ColorSourceRules.All, ColorSourceRules.TextOf, onboardSourceItems,
+            source => config.OnboardColorSource != source, source => config with { OnboardColorSource = source });
         spreadLabel = new ToolStripMenuItem("加大差异") { Enabled = false };
         spreadSlider = new TrackBar
         {
@@ -162,6 +168,8 @@ internal sealed class TrayApp : ApplicationContext
             radiatorEffectMenu,
             spreadLabel,
             spreadSliderHost,
+            onboardItem,
+            onboardSourceMenu,
             new ToolStripSeparator(),
             autoStartItem,
             new ToolStripMenuItem("打开设置文件", null, (_, _) => OpenConfigFile()),
@@ -259,7 +267,7 @@ internal sealed class TrayApp : ApplicationContext
     {
         if (status.Paused)
         {
-            return "已暂停（麦克风显示自带灯效，机箱灯和冷排灯保持当前颜色）";
+            return "已暂停（麦克风显示自带灯效，主板上的灯保持当前颜色）";
         }
 
         if (status.Target is not ZoneColors target)
@@ -286,6 +294,8 @@ internal sealed class TrayApp : ApplicationContext
         micItem.Checked = config.MicEnabled;
         caseItem.Checked = config.CaseEnabled;
         radiatorItem.Checked = config.RadiatorEnabled;
+        onboardItem.Checked = config.OnboardEnabled;
+        CheckOnly(onboardSourceItems, config.OnboardColorSource);
         CheckOnly(caseSourceItems, config.CaseColorSource);
         CheckOnly(radiatorSourceItems, config.RadiatorColorSource);
         CheckOnly(caseEffectItems, config.CaseEffect);

@@ -60,10 +60,11 @@ internal sealed record SyncStatus
 ///             每块区域交给自己的 <see cref="ColorChangeFilter"/>。麦克风按取色方式用其中两块，主板灯按取色来源或灯效用。
 ///   发送线程：每隔 SendIntervalMs 把"此刻应该显示的颜色"发给麦克风。
 ///             麦克风一停止接收就会恢复自带灯效，所以这个线程不能被截图卡住，两件事必须分开。
-///   主板线程：单色、双色灯效只在颜色变了时才发给主板（M5-1 实测主板停止接收后会保持颜色，不用一直发）；
+///   主板线程：机箱灯、冷排灯、主板灯（AORUS 字）都由它发。
+///             单色、双色灯效只在颜色变了时才发给主板（M5-1 实测主板停止接收后会保持颜色，不用一直发）；
 ///             流动灯效要一直发（每秒约 20 次），图案才会转。双色、流动的两个颜色太像时，先"加大差异"。
 ///             主板每次要发很多个包（比麦克风慢），单独一个线程，不会拖慢麦克风。
-/// 找不到壁纸超过 WallpaperLostGraceMs，或者暂停时，麦克风停止发送、回到自带灯效；主板灯保持最后的颜色。
+/// 找不到壁纸超过 WallpaperLostGraceMs，或者暂停时，麦克风停止发送、回到自带灯效；主板上的灯保持最后的颜色。
 /// sync 命令和托盘程序都使用它。
 /// </summary>
 internal sealed class SyncEngine : IDisposable
@@ -493,13 +494,29 @@ internal sealed class SyncEngine : IDisposable
         return zones;
     }
 
+    /// <summary>主板线程记住的"上次成功发出的颜色"。颜色没变就不发；连接出问题时全部清空，重新连上后全部重发。</summary>
+    private sealed class BoardSentColors
+    {
+        /// <summary>不动的灯区（单色、双色）上次发的两个颜色（单色时两个相同）。</summary>
+        public Dictionary<MotherboardLightZone, (Rgb, Rgb)> Zones { get; } = new();
+
+        /// <summary>主板灯上次发的颜色。</summary>
+        public Rgb? Onboard { get; set; }
+
+        public void Clear()
+        {
+            Zones.Clear();
+            Onboard = null;
+        }
+    }
+
     private void BoardLoop()
     {
         List<BoardZoneSetting> zones = EnabledBoardZones();
-        if (zones.Count == 0)
+        if (zones.Count == 0 && !config.OnboardEnabled)
         {
-            // 两个灯区都关了：不连主板，灯保持原样
-            UpdateStatus(s => s with { BoardState = "机箱灯和冷排灯都没有打开同步" });
+            // 主板上的灯都关了：不连主板，灯保持原样
+            UpdateStatus(s => s with { BoardState = "机箱灯、冷排灯、主板灯都没有打开同步" });
             return;
         }
 
@@ -508,8 +525,7 @@ internal sealed class SyncEngine : IDisposable
         TimeSpan interval = anyAnimated ? flowFrameInterval : TimeSpan.FromMilliseconds(config.SendIntervalMs);
         using var board = new MotherboardLight();
 
-        // 不动的灯区最后一次成功发出的两个颜色（单色时两个相同）。颜色没变就不发；连接出问题时清空，重新连上后全部重发
-        var lastSent = new Dictionary<MotherboardLightZone, (Rgb, Rgb)>();
+        var lastSent = new BoardSentColors();
 
         while (!stopping.IsCancellationRequested)
         {
@@ -529,25 +545,25 @@ internal sealed class SyncEngine : IDisposable
         }
     }
 
-    private void SendBoardOnce(MotherboardLight board, List<BoardZoneSetting> zones, Dictionary<MotherboardLightZone, (Rgb, Rgb)> lastSent)
+    private void SendBoardOnce(MotherboardLight board, List<BoardZoneSetting> zones, BoardSentColors lastSent)
     {
         if (paused)
         {
-            UpdateStatus(s => s with { BoardState = "已暂停，机箱灯和冷排灯保持当前颜色" });
+            UpdateStatus(s => s with { BoardState = "已暂停，主板上的灯保持当前颜色" });
             return;
         }
 
         TimeSpan now = clock.Elapsed;
         if (CurrentOf(ColorSource.Average, now) is null)
         {
-            UpdateStatus(s => s with { BoardState = "没有颜色可发，机箱灯和冷排灯保持当前颜色" });
+            UpdateStatus(s => s with { BoardState = "没有颜色可发，主板上的灯保持当前颜色" });
             return;
         }
 
         SendResult result = SendResult.Sent;
         foreach (BoardZoneSetting setting in zones)
         {
-            Rgb[]? leds = BuildBoardLeds(setting, now, lastSent, out (Rgb, Rgb)? staticColors);
+            Rgb[]? leds = BuildBoardLeds(setting, now, lastSent.Zones, out (Rgb, Rgb)? staticColors);
             if (leds is null)
             {
                 continue;
@@ -570,13 +586,18 @@ internal sealed class SyncEngine : IDisposable
 
             if (staticColors is (Rgb, Rgb) sentColors)
             {
-                lastSent[setting.Zone] = sentColors;
+                lastSent.Zones[setting.Zone] = sentColors;
             }
+        }
+
+        if (result == SendResult.Sent)
+        {
+            result = SendOnboardIfChanged(board, now, lastSent);
         }
 
         string boardState = result switch
         {
-            SendResult.Sent => "主板已连接，机箱灯和冷排灯正在同步",
+            SendResult.Sent => "主板已连接，主板上的灯正在同步",
             SendResult.NotConnected => $"等待主板灯光芯片：{board.LastError}（每秒自动重试）",
             _ => $"主板断开：{board.LastError}（会自动重连）",
         };
@@ -596,6 +617,36 @@ internal sealed class SyncEngine : IDisposable
         }
 
         UpdateStatus(s => s with { BoardState = boardState, BoardConnected = connected });
+    }
+
+    /// <summary>
+    /// 主板灯（AORUS 字）：打开了同步、而且颜色变了才发。
+    /// 上、下两个通道都发同一个颜色：M5 测试发现 AORUS 字两个通道都听，只要一个亮它就亮。
+    /// </summary>
+    private SendResult SendOnboardIfChanged(MotherboardLight board, TimeSpan now, BoardSentColors lastSent)
+    {
+        if (!config.OnboardEnabled
+            || CurrentOf(config.OnboardColorSource, now) is not Rgb color
+            || lastSent.Onboard == color)
+        {
+            return SendResult.Sent;
+        }
+
+        SendResult result = board.SendOnboard(new[]
+        {
+            (MotherboardOnboardLight.IoCoverTop, color),
+            (MotherboardOnboardLight.IoCoverBottom, color),
+        });
+        if (result == SendResult.Sent)
+        {
+            lastSent.Onboard = color;
+        }
+        else
+        {
+            lastSent.Clear();
+        }
+
+        return result;
     }
 
     /// <summary>
@@ -653,8 +704,13 @@ internal sealed class SyncEngine : IDisposable
         static string OnOff(bool enabled) => enabled ? "开" : "关";
         return $"麦克风 {OnOff(config.MicEnabled)}，"
             + $"机箱灯 {DescribeBoardZone(config.CaseEnabled, config.CaseColorSource, config.CaseEffect)}，"
-            + $"冷排灯 {DescribeBoardZone(config.RadiatorEnabled, config.RadiatorColorSource, config.RadiatorEffect)}";
+            + $"冷排灯 {DescribeBoardZone(config.RadiatorEnabled, config.RadiatorColorSource, config.RadiatorEffect)}，"
+            + $"主板灯 {DescribeOnboard(config.OnboardEnabled, config.OnboardColorSource)}";
     }
+
+    /// <summary>主板灯的设置说明，比如"开（整张）"或"关"。日志、命令行显示共用。</summary>
+    public static string DescribeOnboard(bool enabled, ColorSource source) =>
+        enabled ? $"开（{ColorSourceRules.TextOf(source)}）" : "关";
 
     /// <summary>
     /// 一个主板灯区的设置说明，比如"开（单色，下半区）""开（左右流动）""关"。日志、命令行显示共用。
