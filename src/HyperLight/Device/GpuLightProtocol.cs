@@ -9,7 +9,10 @@
 /// 芯片挂在显卡 I2C 端口 1、地址 0x67。
 /// 芯片的寄存器编号是 2 字节（比如 0x8020），访问方法：
 ///   读：先往寄存器 0x00 写 2 字节"位置"（高字节在前），再读寄存器 0x81。
-///   写：先往寄存器 0x00 写"位置"，再往寄存器 0x01 写 1 字节（G1 才会用到）。
+///   写：先往寄存器 0x00 写"位置"，再往寄存器 0x01 写 1 字节；
+///       一次写好几个字节时，往寄存器 0x03 做"块写入"（第 1 个字节是长度），最多 3 颗灯（9 字节）一块。
+/// 设颜色的步骤：打开直接控制模式（0x8020 = 1，再"生效" 0x80A0 = 1），然后把颜色写进 0x8100 开始的颜色区。
+/// G0 实测 Luca 的显卡：板卡 1043:88F1，芯片 AUMA0-E6K5-1110，30 颗灯。
 /// "写位置"只是告诉芯片接下来读写哪里，不改任何设置。
 /// 绝不写"保存设置"（往 0x80A0 写 0xAA），所以断电重启后显卡恢复原样。
 /// </remarks>
@@ -54,6 +57,15 @@ internal static class GpuLightProtocol
     /// <summary>"读一个字节"用的寄存器。</summary>
     public const byte ReadRegister = 0x81;
 
+    /// <summary>"写一个字节"用的寄存器。</summary>
+    public const byte WriteRegister = 0x01;
+
+    /// <summary>"块写入"用的寄存器。</summary>
+    public const byte BlockWriteRegister = 0x03;
+
+    /// <summary>每次块写入最多几颗灯（OpenRGB 的值）。</summary>
+    public const int LedsPerBlock = 3;
+
     /// <summary>芯片型号文字（16 字节）。</summary>
     public const ushort DeviceNameRegister = 0x1000;
 
@@ -72,6 +84,21 @@ internal static class GpuLightProtocol
     /// <summary>显卡自己的灯效种类（0 关、1 静态、2 呼吸……）。</summary>
     public const ushort EffectModeRegister = 0x8021;
 
+    /// <summary>"生效"寄存器：改了直接控制开关后，往这里写 <see cref="ApplyValue"/>。</summary>
+    public const ushort ApplyRegister = 0x80A0;
+
+    /// <summary>"生效"的值。注意：绝不能写 0xAA，那是"保存设置"。</summary>
+    public const byte ApplyValue = 0x01;
+
+    /// <summary>直接控制模式的颜色区（这个型号的芯片用 0x8100，每颗灯 3 字节）。</summary>
+    public const ushort DirectColorsRegister = 0x8100;
+
+    /// <summary>
+    /// 最多控制多少颗灯。颜色区后面 0x8160 开始是"灯效颜色区"，32 颗灯正好写到 0x815F 为止，不会写过界。
+    /// 芯片报告的灯珠数超过这个值就不控制，免得写坏别的地方。
+    /// </summary>
+    public const int MaxLeds = 32;
+
     /// <summary>
     /// 这些型号的芯片，灯珠数在配置表第 0x03 个字节；其他型号在第 0x02 个字节（OpenRGB 的规则）。
     /// AUMA0-E6K5-1111 是 OpenRGB 记录的 ROG STRIX 4090 的芯片。
@@ -81,6 +108,16 @@ internal static class GpuLightProtocol
         "AUMA0-E6K5-0107", "AUMA0-E6K5-1111", "AUMA0-E6K5-1107", "AUMA0-E6K5-0008",
         "AUMA0-E6K5-1113", "AUMA0-E6K5-1114", "AUMA0-E6K5-1110",
     };
+
+    /// <summary>
+    /// 把一个颜色变成芯片要的 3 个字节。这颗芯片的顺序是 红、蓝、绿（不是常见的 红、绿、蓝）。
+    /// </summary>
+    public static void WriteColor(Span<byte> destination, Rgb color)
+    {
+        destination[0] = color.R;
+        destination[1] = color.B;
+        destination[2] = color.G;
+    }
 
     /// <summary>是不是支持的显卡（RTX 4090 + 华硕 ROG STRIX 白色版）。这条规则全项目只写在这里。</summary>
     public static bool IsSupportedCard(NvApi.PciIds ids) =>
