@@ -53,6 +53,9 @@ internal sealed class TrayApp : ApplicationContext
     private (ZoneColors? Colors, bool Paused) shownIconState;
     private bool ngenuityWarned;
     private bool openRgbWarned;
+
+    /// <summary>刚点的是开关或多选一的选项：这次点击后菜单不要关，方便连续改好几个。</summary>
+    private bool keepMenuOpen;
     private bool exiting;
     private bool disposed;
 
@@ -88,18 +91,18 @@ internal sealed class TrayApp : ApplicationContext
 
         statusItem = new ToolStripMenuItem("正在启动…") { Enabled = false };
         boardStatusItem = new ToolStripMenuItem("主板：正在启动…") { Enabled = false };
-        pauseItem = new ToolStripMenuItem("暂停同步", null, (_, _) => TogglePause());
-        boostItem = new ToolStripMenuItem("增强颜色（模仿 Wallpaper Engine）", null, (_, _) => ToggleBoost());
+        pauseItem = new ToolStripMenuItem("暂停同步", null, KeepOpen(TogglePause));
+        boostItem = new ToolStripMenuItem("增强颜色（模仿 Wallpaper Engine）", null, KeepOpen(ToggleBoost));
         layoutMenu = new ToolStripMenuItem("取色方式");
         foreach (ZoneLayout layout in new[] { ZoneLayout.TopBottom, ZoneLayout.LeftRight, ZoneLayout.Whole })
         {
-            var item = new ToolStripMenuItem(ZoneLayoutText.Of(layout), null, (_, _) => SelectLayout(layout));
+            var item = new ToolStripMenuItem(ZoneLayoutText.Of(layout), null, KeepOpen(() => SelectLayout(layout)));
             layoutItems[layout] = item;
             layoutMenu.DropDownItems.Add(item);
         }
-        micItem = new ToolStripMenuItem("麦克风", null, (_, _) => ApplyConfig(config with { MicEnabled = !config.MicEnabled }));
-        caseItem = new ToolStripMenuItem("机箱灯", null, (_, _) => ApplyConfig(config with { CaseEnabled = !config.CaseEnabled }));
-        radiatorItem = new ToolStripMenuItem("冷排灯", null, (_, _) => ApplyConfig(config with { RadiatorEnabled = !config.RadiatorEnabled }));
+        micItem = new ToolStripMenuItem("麦克风", null, KeepOpen(() => ApplyConfig(config with { MicEnabled = !config.MicEnabled })));
+        caseItem = new ToolStripMenuItem("机箱灯", null, KeepOpen(() => ApplyConfig(config with { CaseEnabled = !config.CaseEnabled })));
+        radiatorItem = new ToolStripMenuItem("冷排灯", null, KeepOpen(() => ApplyConfig(config with { RadiatorEnabled = !config.RadiatorEnabled })));
         caseSourceMenu = BuildChoiceMenu(
             "机箱灯取色", ColorSourceRules.All, ColorSourceRules.TextOf, caseSourceItems,
             source => config.CaseColorSource != source, source => config with { CaseColorSource = source });
@@ -112,7 +115,7 @@ internal sealed class TrayApp : ApplicationContext
         ToolStripMenuItem radiatorEffectMenu = BuildChoiceMenu(
             "冷排灯灯效", LightEffectRules.All, LightEffectRules.TextOf, radiatorEffectItems,
             effect => config.RadiatorEffect != effect, effect => config with { RadiatorEffect = effect });
-        autoStartItem = new ToolStripMenuItem("开机自启", null, (_, _) => ToggleAutoStart());
+        autoStartItem = new ToolStripMenuItem("开机自启", null, KeepOpen(ToggleAutoStart));
 
         menu = new ContextMenuStrip();
         menu.Items.AddRange(new ToolStripItem[]
@@ -138,6 +141,7 @@ internal sealed class TrayApp : ApplicationContext
             new ToolStripSeparator(),
             new ToolStripMenuItem("退出", null, (_, _) => ExitThread()),
         });
+        AttachKeepOpen(menu);
 
         currentIcon = TrayIconPainter.Paint(null, paused: false);
         shownIconState = (null, false);
@@ -282,18 +286,51 @@ internal sealed class TrayApp : ApplicationContext
         var choiceMenu = new ToolStripMenuItem(title);
         foreach (T choice in choices)
         {
-            var item = new ToolStripMenuItem(textOf(choice), null, (_, _) =>
+            var item = new ToolStripMenuItem(textOf(choice), null, KeepOpen(() =>
             {
                 if (isChange(choice))
                 {
                     ApplyConfig(withChoice(choice));
                 }
-            });
+            }));
             items[choice] = item;
             choiceMenu.DropDownItems.Add(item);
         }
 
         return choiceMenu;
+    }
+
+    /// <summary>
+    /// 包装开关、多选一选项的点击动作：点完以后菜单不关，勾选马上更新，可以接着改别的。
+    /// 「打开设置文件」「重新读取设置」「退出」这些不用它，点完照常关闭菜单。
+    /// </summary>
+    private EventHandler KeepOpen(Action action) => (_, _) =>
+    {
+        keepMenuOpen = true;
+        action();
+
+        // 菜单在这次点击处理的最后才关闭。等这次点击全部处理完，再恢复成"点了就关"
+        menu.BeginInvoke(() => keepMenuOpen = false);
+    };
+
+    /// <summary>给菜单和它所有的子菜单挂上"点了开关不关闭"的处理。</summary>
+    private void AttachKeepOpen(ToolStripDropDown dropDown)
+    {
+        dropDown.Closing += (_, e) =>
+        {
+            if (keepMenuOpen && e.CloseReason == ToolStripDropDownCloseReason.ItemClicked)
+            {
+                e.Cancel = true;
+            }
+        };
+
+        foreach (ToolStripItem item in dropDown.Items)
+        {
+            if (item is ToolStripMenuItem { HasDropDownItems: true } parent)
+            {
+                AttachKeepOpen(parent.DropDown);
+            }
+        }
     }
 
     /// <summary>"多选一"菜单里只勾选当前的那一项。</summary>
