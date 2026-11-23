@@ -65,6 +65,7 @@ internal sealed record SyncStatus
 ///             流动灯效要一直发（每秒约 20 次），图案才会转。双色、流动的两个颜色太像时，先"加大差异"。
 ///             主板每次要发很多个包（比麦克风慢），单独一个线程，不会拖慢麦克风。
 /// 找不到壁纸超过 WallpaperLostGraceMs，或者暂停时，麦克风停止发送、回到自带灯效；主板上的灯保持最后的颜色。
+/// 自由选色模式：不截图，每个设备直接用设置里选好的固定颜色（不做加大差异，颜色是用户亲手选的）。
 /// sync 命令和托盘程序都使用它。
 /// </summary>
 internal sealed class SyncEngine : IDisposable
@@ -215,12 +216,22 @@ internal sealed class SyncEngine : IDisposable
                         UpdateStatus(s => s with { NgenuityRunning = ngenuity, OpenRgbRunning = openRgb });
                     }
 
-                    TimeSpan captureRoundStart = clock.Elapsed;
-                    target = CaptureOnce(capturer, target, ref lastSuccess, lostGrace);
-                    TimeSpan took = clock.Elapsed - captureRoundStart;
-                    if (took > stallThreshold)
+                    if (FreeMode)
                     {
-                        StallLog.Write("截图", $"这次截图很慢：{took.TotalMilliseconds:0} 毫秒");
+                        // 自由选色：不截图。麦克风的颜色放进状态里，托盘图标会显示它
+                        lastSuccess = clock.Elapsed;
+                        ZoneColors free = ZoneColors.Same(config.FreeMicColor);
+                        UpdateStatus(s => s with { WallpaperState = "自由选色模式（不截图）", Captured = free, Target = free, LastError = null });
+                    }
+                    else
+                    {
+                        TimeSpan captureRoundStart = clock.Elapsed;
+                        target = CaptureOnce(capturer, target, ref lastSuccess, lostGrace);
+                        TimeSpan took = clock.Elapsed - captureRoundStart;
+                        if (took > stallThreshold)
+                        {
+                            StallLog.Write("截图", $"这次截图很慢：{took.TotalMilliseconds:0} 毫秒");
+                        }
                     }
                 }
             }
@@ -371,6 +382,9 @@ internal sealed class SyncEngine : IDisposable
     /// <summary>某块区域此刻应该显示的颜色（渐变中的颜色）。还没有颜色时返回 null。</summary>
     private Rgb? CurrentOf(ColorSource region, TimeSpan now) => filters[region].Current(now);
 
+    /// <summary>是不是自由选色模式。</summary>
+    private bool FreeMode => config.ColorMode == ColorMode.Free;
+
     // ───────────────────────── 发送线程 ─────────────────────────
 
     private void SendLoop()
@@ -441,7 +455,19 @@ internal sealed class SyncEngine : IDisposable
         }
 
         TimeSpan now = clock.Elapsed;
-        if (CurrentOf(micRegions.Upper, now) is not Rgb upper || CurrentOf(micRegions.Lower, now) is not Rgb lower)
+        Rgb upper;
+        Rgb lower;
+        if (FreeMode)
+        {
+            upper = config.FreeMicColor;
+            lower = config.FreeMicColor;
+        }
+        else if (CurrentOf(micRegions.Upper, now) is Rgb wallpaperUpper && CurrentOf(micRegions.Lower, now) is Rgb wallpaperLower)
+        {
+            upper = wallpaperUpper;
+            lower = wallpaperLower;
+        }
+        else
         {
             UpdateStatus(s => s with { MicState = "没有颜色可发，麦克风显示自带灯效" });
             return;
@@ -474,8 +500,9 @@ internal sealed class SyncEngine : IDisposable
 
     // ───────────────────────── 主板线程 ─────────────────────────
 
-    /// <summary>一个要同步的主板灯区，以及它的取色来源、灯效和灯珠数。</summary>
-    private readonly record struct BoardZoneSetting(MotherboardLightZone Zone, ColorSource Source, LightEffect Effect, int LedCount);
+    /// <summary>一个要同步的主板灯区，以及它的取色来源、灯效、灯珠数和自由选色的两个颜色。</summary>
+    private readonly record struct BoardZoneSetting(
+        MotherboardLightZone Zone, ColorSource Source, LightEffect Effect, int LedCount, Rgb FreeColor, Rgb FreeColor2);
 
     /// <summary>按配置列出打开了同步的主板灯区。配置和灯区的对应关系只写在这里。</summary>
     private List<BoardZoneSetting> EnabledBoardZones()
@@ -483,12 +510,14 @@ internal sealed class SyncEngine : IDisposable
         var zones = new List<BoardZoneSetting>();
         if (config.CaseEnabled)
         {
-            zones.Add(new BoardZoneSetting(MotherboardLightZone.Case, config.CaseColorSource, config.CaseEffect, config.CaseLedCount));
+            zones.Add(new BoardZoneSetting(
+                MotherboardLightZone.Case, config.CaseColorSource, config.CaseEffect, config.CaseLedCount, config.FreeCaseColor, config.FreeCaseColor2));
         }
 
         if (config.RadiatorEnabled)
         {
-            zones.Add(new BoardZoneSetting(MotherboardLightZone.Radiator, config.RadiatorColorSource, config.RadiatorEffect, config.RadiatorLedCount));
+            zones.Add(new BoardZoneSetting(
+                MotherboardLightZone.Radiator, config.RadiatorColorSource, config.RadiatorEffect, config.RadiatorLedCount, config.FreeRadiatorColor, config.FreeRadiatorColor2));
         }
 
         return zones;
@@ -554,7 +583,7 @@ internal sealed class SyncEngine : IDisposable
         }
 
         TimeSpan now = clock.Elapsed;
-        if (CurrentOf(ColorSource.Average, now) is null)
+        if (!FreeMode && CurrentOf(ColorSource.Average, now) is null)
         {
             UpdateStatus(s => s with { BoardState = "没有颜色可发，主板上的灯保持当前颜色" });
             return;
@@ -625,9 +654,8 @@ internal sealed class SyncEngine : IDisposable
     /// </summary>
     private SendResult SendOnboardIfChanged(MotherboardLight board, TimeSpan now, BoardSentColors lastSent)
     {
-        if (!config.OnboardEnabled
-            || CurrentOf(config.OnboardColorSource, now) is not Rgb color
-            || lastSent.Onboard == color)
+        Rgb? wanted = FreeMode ? config.FreeOnboardColor : CurrentOf(config.OnboardColorSource, now);
+        if (!config.OnboardEnabled || wanted is not Rgb color || lastSent.Onboard == color)
         {
             return SendResult.Sent;
         }
@@ -662,12 +690,19 @@ internal sealed class SyncEngine : IDisposable
         (Rgb, Rgb) colors;
         if (LightEffectRules.TwoColorRegionsOf(setting.Effect) is (ColorSource firstRegion, ColorSource secondRegion))
         {
-            if (CurrentOf(firstRegion, now) is not Rgb first || CurrentOf(secondRegion, now) is not Rgb second)
+            if (FreeMode)
+            {
+                colors = (setting.FreeColor, setting.FreeColor2);
+            }
+            else if (CurrentOf(firstRegion, now) is Rgb first && CurrentOf(secondRegion, now) is Rgb second)
+            {
+                colors = ColorEnhancer.Separate(first, second, config.TwoColorSpread);
+            }
+            else
             {
                 return null;
             }
 
-            colors = ColorEnhancer.Separate(first, second, config.TwoColorSpread);
             if (LightEffectRules.IsAnimated(setting.Effect))
             {
                 double cyclePosition = now.TotalMilliseconds / config.FlowCycleMs;
@@ -678,7 +713,8 @@ internal sealed class SyncEngine : IDisposable
         }
         else
         {
-            if (CurrentOf(setting.Source, now) is not Rgb color)
+            Rgb? wanted = FreeMode ? setting.FreeColor : CurrentOf(setting.Source, now);
+            if (wanted is not Rgb color)
             {
                 return null;
             }
@@ -702,7 +738,7 @@ internal sealed class SyncEngine : IDisposable
     private string DescribeDevices()
     {
         static string OnOff(bool enabled) => enabled ? "开" : "关";
-        return $"麦克风 {OnOff(config.MicEnabled)}，"
+        return $"模式 {ColorModeRules.TextOf(config.ColorMode)}，麦克风 {OnOff(config.MicEnabled)}，"
             + $"机箱灯 {DescribeBoardZone(config.CaseEnabled, config.CaseColorSource, config.CaseEffect)}，"
             + $"冷排灯 {DescribeBoardZone(config.RadiatorEnabled, config.RadiatorColorSource, config.RadiatorEffect)}，"
             + $"主板灯 {DescribeOnboard(config.OnboardEnabled, config.OnboardColorSource)}";

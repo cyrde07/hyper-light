@@ -9,7 +9,7 @@ namespace HyperLight.Tray;
 
 /// <summary>
 /// 托盘程序（M4）：屏幕右下角一个小圆点图标，上下两半显示当前的上、下两个颜色。
-/// 右键菜单：状态（麦克风、主板）、暂停 / 恢复、增强颜色、取色方式、
+/// 右键菜单：状态（麦克风、主板）、暂停 / 恢复、模式（跟壁纸 / 自由选色）、自由选色的颜色、增强颜色、取色方式、
 /// 麦克风 / 机箱灯 / 冷排灯 / 主板灯的开关，机箱灯和冷排灯的取色和灯效、加大差异（滑动条）、主板灯的取色、
 /// 开机自启、打开设置文件、重新读取设置、退出。
 /// </summary>
@@ -38,6 +38,13 @@ internal sealed class TrayApp : ApplicationContext
     private readonly ToolStripMenuItem pauseItem;
     private readonly ToolStripMenuItem boostItem;
     private readonly ToolStripMenuItem layoutMenu;
+    private readonly Dictionary<ColorMode, ToolStripMenuItem> modeItems = new();
+    private readonly ToolStripMenuItem freeMicColorItem;
+    private readonly ToolStripMenuItem freeCaseColorItem;
+    private readonly ToolStripMenuItem freeCaseColor2Item;
+    private readonly ToolStripMenuItem freeRadiatorColorItem;
+    private readonly ToolStripMenuItem freeRadiatorColor2Item;
+    private readonly ToolStripMenuItem freeOnboardColorItem;
     private readonly Dictionary<ZoneLayout, ToolStripMenuItem> layoutItems = new();
     private readonly ToolStripMenuItem micItem;
     private readonly ToolStripMenuItem caseItem;
@@ -49,6 +56,7 @@ internal sealed class TrayApp : ApplicationContext
     private readonly Dictionary<LightEffect, ToolStripMenuItem> caseEffectItems = new();
     private readonly Dictionary<LightEffect, ToolStripMenuItem> radiatorEffectItems = new();
     private readonly ToolStripMenuItem onboardItem;
+    private readonly ToolStripMenuItem onboardSourceMenu;
     private readonly Dictionary<ColorSource, ToolStripMenuItem> onboardSourceItems = new();
     private readonly ToolStripMenuItem spreadLabel;
     private readonly TrackBar spreadSlider;
@@ -105,6 +113,31 @@ internal sealed class TrayApp : ApplicationContext
         boardStatusItem = new ToolStripMenuItem("主板：正在启动…") { Enabled = false };
         pauseItem = new ToolStripMenuItem("暂停同步", null, KeepOpen(TogglePause));
         boostItem = new ToolStripMenuItem("增强颜色（模仿 Wallpaper Engine）", null, KeepOpen(ToggleBoost));
+        ToolStripMenuItem modeMenu = BuildChoiceMenu(
+            "模式", ColorModeRules.All, ColorModeRules.TextOf, modeItems,
+            mode => config.ColorMode != mode, mode => config with { ColorMode = mode });
+        freeMicColorItem = new ToolStripMenuItem("麦克风颜色…", null,
+            CloseAfter(() => PickColor(config.FreeMicColor, color => config with { FreeMicColor = color })));
+        freeCaseColorItem = new ToolStripMenuItem("机箱灯颜色…", null,
+            CloseAfter(() => PickColor(config.FreeCaseColor, color => config with { FreeCaseColor = color })));
+        freeCaseColor2Item = new ToolStripMenuItem("机箱灯第二个颜色（双色、流动用）…", null,
+            CloseAfter(() => PickColor(config.FreeCaseColor2, color => config with { FreeCaseColor2 = color })));
+        freeRadiatorColorItem = new ToolStripMenuItem("冷排灯颜色…", null,
+            CloseAfter(() => PickColor(config.FreeRadiatorColor, color => config with { FreeRadiatorColor = color })));
+        freeRadiatorColor2Item = new ToolStripMenuItem("冷排灯第二个颜色（双色、流动用）…", null,
+            CloseAfter(() => PickColor(config.FreeRadiatorColor2, color => config with { FreeRadiatorColor2 = color })));
+        freeOnboardColorItem = new ToolStripMenuItem("主板灯颜色…", null,
+            CloseAfter(() => PickColor(config.FreeOnboardColor, color => config with { FreeOnboardColor = color })));
+        var freeColorMenu = new ToolStripMenuItem("自由选色");
+        freeColorMenu.DropDownItems.AddRange(new ToolStripItem[]
+        {
+            freeMicColorItem,
+            freeCaseColorItem,
+            freeCaseColor2Item,
+            freeRadiatorColorItem,
+            freeRadiatorColor2Item,
+            freeOnboardColorItem,
+        });
         layoutMenu = new ToolStripMenuItem("取色方式");
         foreach (ZoneLayout layout in new[] { ZoneLayout.TopBottom, ZoneLayout.LeftRight, ZoneLayout.Whole })
         {
@@ -128,7 +161,7 @@ internal sealed class TrayApp : ApplicationContext
             "冷排灯灯效", LightEffectRules.All, LightEffectRules.TextOf, radiatorEffectItems,
             effect => config.RadiatorEffect != effect, effect => config with { RadiatorEffect = effect });
         onboardItem = new ToolStripMenuItem("主板灯", null, KeepOpen(() => ApplyConfig(config with { OnboardEnabled = !config.OnboardEnabled })));
-        ToolStripMenuItem onboardSourceMenu = BuildChoiceMenu(
+        onboardSourceMenu = BuildChoiceMenu(
             "主板灯取色", ColorSourceRules.All, ColorSourceRules.TextOf, onboardSourceItems,
             source => config.OnboardColorSource != source, source => config with { OnboardColorSource = source });
         spreadLabel = new ToolStripMenuItem("加大差异") { Enabled = false };
@@ -156,6 +189,8 @@ internal sealed class TrayApp : ApplicationContext
             boardStatusItem,
             new ToolStripSeparator(),
             pauseItem,
+            modeMenu,
+            freeColorMenu,
             boostItem,
             layoutMenu,
             new ToolStripSeparator(),
@@ -220,7 +255,7 @@ internal sealed class TrayApp : ApplicationContext
     private void RefreshFromEngine()
     {
         SyncStatus status = engine.Status;
-        string state = DescribeState(status, config.MicEnabled);
+        string state = DescribeState(status, config);
         statusItem.Text = state;
         boardStatusItem.Text = $"主板：{status.BoardState}";
         pauseItem.Text = status.Paused ? "恢复同步" : "暂停同步";
@@ -266,7 +301,7 @@ internal sealed class TrayApp : ApplicationContext
     }
 
     /// <summary>把引擎状态变成一句话（菜单第一行和图标提示文字）。</summary>
-    private static string DescribeState(SyncStatus status, bool micEnabled)
+    private static string DescribeState(SyncStatus status, AppConfig config)
     {
         if (status.Paused)
         {
@@ -278,12 +313,13 @@ internal sealed class TrayApp : ApplicationContext
             return status.LastError ?? status.WallpaperState;
         }
 
-        if (!micEnabled)
+        string doing = config.ColorMode == ColorMode.Free ? "自由选色" : "同步中";
+        if (!config.MicEnabled)
         {
-            return $"同步中：{target}（麦克风已关闭）";
+            return $"{doing}：{target}（麦克风已关闭）";
         }
 
-        return status.MicConnected ? $"同步中：{target}" : status.MicState;
+        return status.MicConnected ? $"{doing}：{target}" : status.MicState;
     }
 
     private void UpdateCheckmarks()
@@ -310,8 +346,22 @@ internal sealed class TrayApp : ApplicationContext
         spreadLabel.Text = SpreadText(config.TwoColorSpread);
 
         // 双色、流动灯效用的是固定的两块区域，取色只在单色时有用：不用时变灰，免得以为点了没反应
-        caseSourceMenu.Enabled = config.CaseEffect == LightEffect.Solid;
-        radiatorSourceMenu.Enabled = config.RadiatorEffect == LightEffect.Solid;
+        // 自由选色时不截图，和壁纸有关的选项（增强颜色、取色方式、取色、加大差异）都用不到，一起变灰
+        bool wallpaperMode = config.ColorMode == ColorMode.Wallpaper;
+        boostItem.Enabled = wallpaperMode;
+        layoutMenu.Enabled = wallpaperMode;
+        spreadSlider.Enabled = wallpaperMode;
+        caseSourceMenu.Enabled = wallpaperMode && config.CaseEffect == LightEffect.Solid;
+        radiatorSourceMenu.Enabled = wallpaperMode && config.RadiatorEffect == LightEffect.Solid;
+        onboardSourceMenu.Enabled = wallpaperMode;
+
+        CheckOnly(modeItems, config.ColorMode);
+        SetSwatch(freeMicColorItem, config.FreeMicColor);
+        SetSwatch(freeCaseColorItem, config.FreeCaseColor);
+        SetSwatch(freeCaseColor2Item, config.FreeCaseColor2);
+        SetSwatch(freeRadiatorColorItem, config.FreeRadiatorColor);
+        SetSwatch(freeRadiatorColor2Item, config.FreeRadiatorColor2);
+        SetSwatch(freeOnboardColorItem, config.FreeOnboardColor);
 
         autoStartItem.Checked = IsAutoStartEnabledSafe();
     }
@@ -385,6 +435,41 @@ internal sealed class TrayApp : ApplicationContext
                 AttachKeepOpen(parent.DropDown);
             }
         }
+    }
+
+    /// <summary>
+    /// 弹出 Windows 的选色窗口，从 <paramref name="current"/> 开始选。点了确定就保存新颜色并马上生效；点取消什么都不改。
+    /// </summary>
+    private void PickColor(Rgb current, Func<Rgb, AppConfig> withColor)
+    {
+        using var dialog = new ColorDialog
+        {
+            Color = Color.FromArgb(current.R, current.G, current.B),
+            FullOpen = true,
+            AnyColor = true,
+        };
+
+        if (dialog.ShowDialog() == DialogResult.OK)
+        {
+            Color picked = dialog.Color;
+            ApplyConfig(withColor(new Rgb(picked.R, picked.G, picked.B)));
+        }
+    }
+
+    /// <summary>在菜单项前面画一个小色块，显示现在选的颜色。旧的色块图片会被释放。</summary>
+    private static void SetSwatch(ToolStripMenuItem item, Rgb color)
+    {
+        var swatch = new Bitmap(16, 16);
+        using (Graphics graphics = Graphics.FromImage(swatch))
+        {
+            using var fill = new SolidBrush(Color.FromArgb(color.R, color.G, color.B));
+            graphics.FillRectangle(fill, 1, 1, 14, 14);
+            graphics.DrawRectangle(Pens.Gray, 1, 1, 13, 13);
+        }
+
+        Image? old = item.Image;
+        item.Image = swatch;
+        old?.Dispose();
     }
 
     /// <summary>拖动滑动条时：马上更新文字，停下一会儿再生效（拖动过程中不反复重启同步）。</summary>
@@ -553,6 +638,14 @@ internal sealed class TrayApp : ApplicationContext
             spreadApplyTimer.Dispose();
             engine.Dispose();
             notifyIcon.Dispose();
+            foreach (ToolStripMenuItem item in new[]
+            {
+                freeMicColorItem, freeCaseColorItem, freeCaseColor2Item, freeRadiatorColorItem, freeRadiatorColor2Item, freeOnboardColorItem,
+            })
+            {
+                item.Image?.Dispose();
+            }
+
             menu.Dispose();
             TrayIconPainter.Destroy(currentIcon);
         }

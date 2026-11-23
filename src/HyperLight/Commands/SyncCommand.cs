@@ -109,6 +109,7 @@ internal static class SyncCommand
         Console.WriteLine(
             $"增强颜色：{(config.BoostColors ? $"开（{config.SaturationBoost} 倍）" : "关")}    "
             + $"取色方式：{ZoneLayoutText.Of(config.ZoneLayout)}");
+        Console.WriteLine($"模式：{ColorModeRules.TextOf(config.ColorMode)}");
         Console.WriteLine(
             $"麦克风：{(config.MicEnabled ? "开" : "关")}    "
             + $"机箱灯：{SyncEngine.DescribeBoardZone(config.CaseEnabled, config.CaseColorSource, config.CaseEffect)}    "

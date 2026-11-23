@@ -45,6 +45,9 @@ internal sealed record AppConfig
     [Description("取色方式：topBottom 上下（上半张→上灯区，下半张→下灯区）；leftRight 左右（左半张→上灯区，右半张→下灯区）；whole 整张壁纸（两个灯区同色）。默认 topBottom")]
     public ZoneLayout ZoneLayout { get; init; } = ZoneLayout.TopBottom;
 
+    [Description("颜色模式：wallpaper 跟壁纸（截壁纸算颜色）；free 自由选色（每个设备用下面选好的固定颜色，不截图）。默认 wallpaper")]
+    public ColorMode ColorMode { get; init; } = ColorMode.Wallpaper;
+
     [Description("麦克风：true 跟着壁纸变色；false 不控制，麦克风显示自带灯效。默认 true")]
     public bool MicEnabled { get; init; } = true;
 
@@ -78,6 +81,24 @@ internal sealed record AppConfig
     [Description("流动速度（毫秒）：流动灯效转一整圈要多久。数值越小转得越快。默认 2000。范围 500～20000")]
     public int FlowCycleMs { get; init; } = 2000;
 
+    [Description("自由选色：麦克风的颜色（上下相同），写成 FF69B4 这种 6 位十六进制。托盘菜单里可以直接选")]
+    public Rgb FreeMicColor { get; init; } = new(0xFF, 0x69, 0xB4);
+
+    [Description("自由选色：机箱灯的颜色（单色时用；双色、流动时是第一个颜色）")]
+    public Rgb FreeCaseColor { get; init; } = new(0xFF, 0x69, 0xB4);
+
+    [Description("自由选色：机箱灯的第二个颜色（双色、流动时用）")]
+    public Rgb FreeCaseColor2 { get; init; } = new(0x8A, 0x2B, 0xE2);
+
+    [Description("自由选色：冷排灯的颜色（单色时用；双色、流动时是第一个颜色）")]
+    public Rgb FreeRadiatorColor { get; init; } = new(0xFF, 0x69, 0xB4);
+
+    [Description("自由选色：冷排灯的第二个颜色（双色、流动时用）")]
+    public Rgb FreeRadiatorColor2 { get; init; } = new(0x8A, 0x2B, 0xE2);
+
+    [Description("自由选色：主板灯（AORUS 字）的颜色")]
+    public Rgb FreeOnboardColor { get; init; } = new(0xFF, 0x69, 0xB4);
+
     [Description("双色、流动图案每几颗灯重复一次。底部、侧面风扇是 8 颗灯，后置风扇 16 颗；默认 8，每个风扇正好一整圈。范围 2～64")]
     public int FlowPeriodLeds { get; init; } = 8;
 
@@ -93,15 +114,18 @@ internal sealed record AppConfig
     /// <summary>取色方式这类选项在文件里写成文字（比如 "leftRight"），不写成数字。</summary>
     private static readonly JsonStringEnumConverter enumAsText = new(JsonNamingPolicy.CamelCase, allowIntegerValues: false);
 
+    /// <summary>颜色在文件里写成 "FF69B4" 这种文字。</summary>
+    private static readonly RgbHexConverter colorAsText = new();
+
     private static readonly JsonSerializerOptions readOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         ReadCommentHandling = JsonCommentHandling.Skip,
         AllowTrailingCommas = true,
-        Converters = { enumAsText },
+        Converters = { enumAsText, colorAsText },
     };
 
-    private static readonly JsonSerializerOptions writeValueOptions = new() { Converters = { enumAsText } };
+    private static readonly JsonSerializerOptions writeValueOptions = new() { Converters = { enumAsText, colorAsText } };
 
     /// <summary>
     /// 读取配置。文件不存在就用默认值，并生成一份带说明的配置文件；
@@ -165,7 +189,7 @@ internal sealed record AppConfig
         }
     }
 
-    /// <summary>把每一项的数值检查一遍，超出范围的改回默认值。开关（true / false）和取色方式、取色来源、灯效（读取时已检查）不需要再检查。</summary>
+    /// <summary>把每一项的数值检查一遍，超出范围的改回默认值。开关（true / false）和取色方式、取色来源、灯效、模式、颜色（读取时已检查）不需要再检查。</summary>
     private AppConfig Validated(List<string> notes)
     {
         var defaults = new AppConfig();
