@@ -795,6 +795,47 @@ internal sealed class SyncEngine : IDisposable
         return leds;
     }
 
+    // ───────────────────────── 睡眠时关灯 ─────────────────────────
+
+    /// <summary>
+    /// 睡眠前把打开了同步的冷排灯和主板灯（AORUS 字）设成黑色。
+    /// 它们靠主板的待机电，睡眠时一直有电，芯片会停在最后的颜色上，不关的话会一直亮。
+    /// 机箱灯（集线板用电源的 SATA 线）和显卡睡眠时本来就断电，不用管。
+    /// 调用前要先停掉同步引擎；醒来后重新启动引擎，颜色会自动恢复。
+    /// 用和同步线程一样的设备锁，不会和还没停下的线程同时写。本方法不会抛出异常。
+    /// </summary>
+    public static void TurnOffLightsForSleep(AppConfig config)
+    {
+        var black = new Rgb(0, 0, 0);
+        var results = new List<string>();
+        try
+        {
+            if (config.RadiatorEnabled || config.OnboardEnabled)
+            {
+                lock (boardGate)
+                {
+                    using var board = new MotherboardLight();
+                    if (config.RadiatorEnabled)
+                    {
+                        results.Add($"冷排灯 {board.SendZone(MotherboardLightZone.Radiator, Enumerable.Repeat(black, config.RadiatorLedCount).ToArray())}");
+                    }
+
+                    if (config.OnboardEnabled)
+                    {
+                        results.Add($"主板灯 {board.SendOnboard(new[] { (MotherboardOnboardLight.IoCoverTop, black), (MotherboardOnboardLight.IoCoverBottom, black) })}");
+                    }
+                }
+            }
+
+            StallLog.Write("睡眠", $"准备睡眠，关灯：{(results.Count == 0 ? "冷排灯和主板灯都没有打开同步" : string.Join("，", results))}");
+        }
+        catch (Exception ex)
+        {
+            // 关灯失败不能影响睡眠，记下来就行
+            StallLog.Write("睡眠", $"准备睡眠时关灯出错：{ex.GetType().Name}：{ex.Message}（已完成：{string.Join("，", results)}）");
+        }
+    }
+
     // ───────────────────────── 显卡线程 ─────────────────────────
 
     /// <summary>显卡线程自己的状态（只在显卡线程里用）。</summary>

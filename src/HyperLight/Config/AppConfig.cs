@@ -75,6 +75,9 @@ internal sealed record AppConfig
     [Description("显卡灯颜色加强（0～100）：淡颜色在 LED 上看起来发白，加强后亮度不变、颜色更浓。0 表示关闭。托盘菜单里可以用滑动条调。默认 60")]
     public int GpuColorBoost { get; init; } = 60;
 
+    [Description("睡眠时关灯：true 电脑睡眠前把打开了同步的冷排灯、主板灯（AORUS 字）设成黑色，醒来后自动恢复（机箱灯、显卡睡眠时本来就断电）；false 睡眠时保持最后的颜色。默认 true")]
+    public bool SleepLightsOff { get; init; } = true;
+
     [Description("机箱灯取色（灯效是单色时用）：upper 上半区；lower 下半区；left 左半区；right 右半区；average 整张。默认 lower")]
     public ColorSource CaseColorSource { get; init; } = ColorSource.Lower;
 

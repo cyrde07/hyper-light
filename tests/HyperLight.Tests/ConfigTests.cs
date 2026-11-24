@@ -28,6 +28,7 @@ public sealed class ConfigTests : IDisposable
         Assert.Equal(64, config.CaseLedCount);
         Assert.Equal(64, config.RadiatorLedCount);
         Assert.True(config.GpuEnabled);
+        Assert.True(config.SleepLightsOff);
 
         string text = File.ReadAllText(path);
         Assert.Contains("\"caseColorSource\": \"lower\"", text);

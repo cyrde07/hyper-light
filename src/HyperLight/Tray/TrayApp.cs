@@ -3,7 +3,9 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Security;
 using HyperLight.ColorProcessing;
+using Microsoft.Win32;
 using HyperLight.Config;
+using HyperLight.Diagnostics;
 
 namespace HyperLight.Tray;
 
@@ -11,7 +13,7 @@ namespace HyperLight.Tray;
 /// 托盘程序（M4）：屏幕右下角一个小圆点图标，上下两半显示当前的上、下两个颜色。
 /// 右键菜单：状态（麦克风、主板、显卡）、暂停 / 恢复、模式（跟壁纸 / 自由选色）、自由选色的颜色、增强颜色、取色方式、
 /// 麦克风 / 机箱灯 / 冷排灯 / 主板灯 / 显卡灯的开关，机箱灯和冷排灯的取色和灯效、加大差异（滑动条）、
-/// 主板灯和显卡灯的取色和颜色加强（滑动条）、开机自启、打开设置文件、重新读取设置、退出。
+/// 主板灯和显卡灯的取色和颜色加强（滑动条）、睡眠时关灯、开机自启、打开设置文件、重新读取设置、退出。
 /// </summary>
 /// <remarks>
 /// 界面只在主线程（界面线程）里操作。同步工作在 <see cref="SyncEngine"/> 自己的线程里进行，
@@ -64,7 +66,11 @@ internal sealed class TrayApp : ApplicationContext
     private readonly ToolStripMenuItem gpuSourceMenu;
     private readonly Dictionary<ColorSource, ToolStripMenuItem> gpuSourceItems = new();
     private readonly MenuSlider gpuBoostSlider;
+    private readonly ToolStripMenuItem sleepItem;
     private readonly ToolStripMenuItem autoStartItem;
+
+    /// <summary>界面线程。Windows 的睡眠、唤醒通知可能从别的线程来，要转到界面线程处理。</summary>
+    private readonly SynchronizationContext uiContext;
     private readonly System.Windows.Forms.Timer refreshTimer;
 
     private AppConfig config;
@@ -219,6 +225,7 @@ internal sealed class TrayApp : ApplicationContext
                     ApplyConfig(config with { GpuColorBoost = boost });
                 }
             });
+        sleepItem = new ToolStripMenuItem("睡眠时关灯", null, KeepOpen(() => ApplyConfig(config with { SleepLightsOff = !config.SleepLightsOff })));
         autoStartItem = new ToolStripMenuItem("开机自启", null, KeepOpen(ToggleAutoStart));
 
         menu = new ContextMenuStrip();
@@ -252,6 +259,7 @@ internal sealed class TrayApp : ApplicationContext
             gpuBoostSlider.Label,
             gpuBoostSlider.Host,
             new ToolStripSeparator(),
+            sleepItem,
             autoStartItem,
             ClosingItem("打开设置文件", OpenConfigFile),
             ClosingItem("重新读取设置", ReloadConfig),
@@ -274,6 +282,10 @@ internal sealed class TrayApp : ApplicationContext
         refreshTimer.Tick += (_, _) => RefreshFromEngine();
 
         engine = StartEngine(config, paused: false);
+
+        // 菜单（WinForms 控件）创建后，界面线程就有了可以转发调用的上下文
+        uiContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
+        SystemEvents.PowerModeChanged += OnPowerModeChanged;
         TryRefreshAutoStartPath();
         UpdateCheckmarks();
         refreshTimer.Start();
@@ -410,6 +422,7 @@ internal sealed class TrayApp : ApplicationContext
         SetSwatch(freeOnboardColorItem, config.FreeOnboardColor);
         SetSwatch(freeGpuColorItem, config.FreeGpuColor);
 
+        sleepItem.Checked = config.SleepLightsOff;
         autoStartItem.Checked = IsAutoStartEnabledSafe();
     }
 
@@ -640,10 +653,55 @@ internal sealed class TrayApp : ApplicationContext
     /// <summary>用当前设置重启同步引擎，保持原来的暂停状态。重启时麦克风可能会闪一下自带灯效，主板灯会把颜色重发一次。</summary>
     private void RestartEngine()
     {
-        bool wasPaused = engine.Paused;
+        bool wasPaused = sleeping ? pausedBeforeSleep : engine.Paused;
+        sleeping = false;
         engine.Dispose();
         engine = StartEngine(config, wasPaused);
         RefreshFromEngine();
+    }
+
+    // ───────────────────────── 睡眠、唤醒 ─────────────────────────
+
+    /// <summary>睡眠前关了灯、停了同步，等着醒来时恢复。</summary>
+    private bool sleeping;
+
+    /// <summary>睡眠前是不是暂停着（醒来后保持原样）。</summary>
+    private bool pausedBeforeSleep;
+
+    /// <summary>
+    /// Windows 的睡眠、唤醒通知。可能从别的线程来：同步转到界面线程处理（睡眠前必须做完关灯，所以不能异步）。
+    /// </summary>
+    private void OnPowerModeChanged(object? sender, PowerModeChangedEventArgs e)
+    {
+        PowerModes mode = e.Mode;
+        uiContext.Send(_ => HandlePowerMode(mode), null);
+    }
+
+    /// <summary>
+    /// 睡眠前：停止同步，把打开了同步的冷排灯、主板灯设成黑色（「睡眠时关灯」打开时）。
+    /// 醒来后：重新启动同步，所有灯恢复颜色。
+    /// </summary>
+    private void HandlePowerMode(PowerModes mode)
+    {
+        if (exiting || disposed)
+        {
+            return;
+        }
+
+        if (mode == PowerModes.Suspend && config.SleepLightsOff && !sleeping)
+        {
+            sleeping = true;
+            pausedBeforeSleep = engine.Paused;
+            engine.Dispose();
+            SyncEngine.TurnOffLightsForSleep(config);
+        }
+        else if (mode == PowerModes.Resume && sleeping)
+        {
+            sleeping = false;
+            StallLog.Write("唤醒", "电脑醒了，恢复同步");
+            engine = StartEngine(config, pausedBeforeSleep);
+            RefreshFromEngine();
+        }
     }
 
     // ───────────────────────── 退出 ─────────────────────────
@@ -654,6 +712,7 @@ internal sealed class TrayApp : ApplicationContext
         if (!exiting)
         {
             exiting = true;
+            SystemEvents.PowerModeChanged -= OnPowerModeChanged;
             refreshTimer.Stop();
             spreadSlider.Stop();
             onboardBoostSlider.Stop();
@@ -670,6 +729,7 @@ internal sealed class TrayApp : ApplicationContext
         if (disposing && !disposed)
         {
             disposed = true;
+            SystemEvents.PowerModeChanged -= OnPowerModeChanged;
             refreshTimer.Dispose();
             spreadSlider.Dispose();
             onboardBoostSlider.Dispose();
