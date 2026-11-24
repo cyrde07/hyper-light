@@ -641,6 +641,13 @@ internal sealed class SyncEngine : IDisposable
             TimeSpan sendStart = clock.Elapsed;
             lock (boardGate)
             {
+                // 拿到锁之后再看一次暂停：睡眠前"暂停 + 关灯"可能正好发生在准备颜色的这段时间，
+                // 这时不能再发，不然会把刚写进去的黑色盖掉
+                if (paused)
+                {
+                    return;
+                }
+
                 result = board.SendZone(setting.Zone, leds);
             }
 
@@ -715,6 +722,12 @@ internal sealed class SyncEngine : IDisposable
         SendResult result;
         lock (boardGate)
         {
+            // 同上：拿到锁之后再看一次暂停，免得盖掉睡眠前写的黑色
+            if (paused)
+            {
+                return SendResult.Sent;
+            }
+
             result = board.SendOnboard(new[]
             {
                 (MotherboardOnboardLight.IoCoverTop, color),
