@@ -810,6 +810,12 @@ internal sealed class SyncEngine : IDisposable
 
     // ───────────────────────── 睡眠时关灯 ─────────────────────────
 
+    /// <summary>睡眠前冷排的黑色连发几次（冷排灯条接触不良，一次常常传不到后半段）。</summary>
+    private const int sleepBlackRepeats = 10;
+
+    /// <summary>每次连发之间隔多久。10 次一共大约半秒，不会明显拖慢睡眠。</summary>
+    private static readonly TimeSpan sleepBlackRepeatDelay = TimeSpan.FromMilliseconds(40);
+
     /// <summary>
     /// 睡眠前把打开了同步的冷排灯和主板灯（AORUS 字）设成黑色。
     /// 它们靠主板的待机电，睡眠时一直有电，芯片会停在最后的颜色上，不关的话会一直亮。
@@ -828,14 +834,24 @@ internal sealed class SyncEngine : IDisposable
                 lock (boardGate)
                 {
                     using var board = new MotherboardLight();
-                    if (config.RadiatorEnabled)
-                    {
-                        results.Add($"冷排灯 {board.SendZone(MotherboardLightZone.Radiator, Enumerable.Repeat(black, config.RadiatorLedCount).ToArray())}");
-                    }
-
                     if (config.OnboardEnabled)
                     {
                         results.Add($"主板灯 {board.SendOnboard(new[] { (MotherboardOnboardLight.IoCoverTop, black), (MotherboardOnboardLight.IoCoverBottom, black) })}");
+                    }
+
+                    if (config.RadiatorEnabled)
+                    {
+                        // 冷排侧面灯条有一颗灯珠接触不良，数据只是"偶尔"能传到后面的灯（M5 实测）。
+                        // 只发一次的话，后面那段常常收不到，睡眠时停在彩色上；连发几次，传过去的机会大得多
+                        Rgb[] blackLeds = Enumerable.Repeat(black, config.RadiatorLedCount).ToArray();
+                        SendResult radiatorResult = SendResult.Sent;
+                        for (int i = 0; i < sleepBlackRepeats && radiatorResult == SendResult.Sent; i++)
+                        {
+                            radiatorResult = board.SendZone(MotherboardLightZone.Radiator, blackLeds);
+                            Thread.Sleep(sleepBlackRepeatDelay);
+                        }
+
+                        results.Add($"冷排灯 {radiatorResult}（连发 {sleepBlackRepeats} 次）");
                     }
                 }
             }
