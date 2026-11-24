@@ -678,9 +678,14 @@ internal sealed class TrayApp : ApplicationContext
     }
 
     /// <summary>
-    /// 睡眠前：停止同步，把打开了同步的冷排灯、主板灯设成黑色（「睡眠时关灯」打开时）。
-    /// 醒来后：重新启动同步，所有灯恢复颜色。
+    /// 睡眠前：马上暂停同步，然后立刻把打开了同步的冷排灯、主板灯设成黑色（「睡眠时关灯」打开时）。
+    /// 醒来后：重新启动同步（重新连接所有设备），所有灯恢复颜色。
     /// </summary>
+    /// <remarks>
+    /// 睡眠前不能先"停掉同步引擎"：快睡眠时截图会卡住，停引擎要等它最多 5 秒，
+    /// 而 Windows 不会等，电脑已经睡了，关灯还没轮到（实测日志：醒来后才关灯）。
+    /// 所以只设暂停标记（不用等），各线程下一轮就不再发了；关灯用设备锁，正在发的那一次发完后才写黑色，黑色一定是最后一个。
+    /// </remarks>
     private void HandlePowerMode(PowerModes mode)
     {
         if (exiting || disposed)
@@ -692,13 +697,14 @@ internal sealed class TrayApp : ApplicationContext
         {
             sleeping = true;
             pausedBeforeSleep = engine.Paused;
-            engine.Dispose();
+            engine.Paused = true;
             SyncEngine.TurnOffLightsForSleep(config);
         }
         else if (mode == PowerModes.Resume && sleeping)
         {
             sleeping = false;
             StallLog.Write("唤醒", "电脑醒了，恢复同步");
+            engine.Dispose();
             engine = StartEngine(config, pausedBeforeSleep);
             RefreshFromEngine();
         }
